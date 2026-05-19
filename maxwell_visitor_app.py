@@ -34,12 +34,12 @@ app = Flask(__name__)
 app.secret_key = "maxwell2024secret"
 DB = "maxwell_visitors.db"
 
-SENDER_EMAIL    = "maxwellvisitor05@gmail.com"
-SENDER_PASSWORD = "hwqqgjkrayznmilx"
-ADMIN_EMAIL     = "info@maxwells.in"
-ADMIN_PIN       = "1234"
-PANTRY_EMAIL    = "maxwellvisitor05@gmail.com"
-PANTRY_PASSWORD = "MaxwellPantry2024"
+SENDER_EMAIL    = os.environ.get("SENDER_EMAIL", "maxwellvisitor05@gmail.com")
+SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD", "hwqqgjkrayznmilx")
+ADMIN_EMAIL     = os.environ.get("ADMIN_EMAIL", "info@maxwells.in")
+ADMIN_PIN       = os.environ.get("ADMIN_PIN", "1234")
+PANTRY_EMAIL    = os.environ.get("PANTRY_EMAIL", "maxwellvisitor05@gmail.com")
+PANTRY_PASSWORD = os.environ.get("PANTRY_PASSWORD", "MaxwellPantry2024")
 
 EMPLOYEE_EMAILS = {
     "Nishit Patel"        : "production@maxwells.in",
