@@ -140,8 +140,7 @@ def send_email(to_list, subject, body):
         msg["From"]    = SENDER_EMAIL
         msg["To"]      = ", ".join(to_list)
         msg.attach(MIMEText(body, "html"))
-        with smtplib.SMTP("smtp-relay.brevo.com", 2525) as s:
-            s.starttls()
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
             s.login(SENDER_EMAIL, SENDER_PASSWORD)
             s.sendmail(SENDER_EMAIL, to_list, msg.as_string())
         print("Email sent to:", to_list)
