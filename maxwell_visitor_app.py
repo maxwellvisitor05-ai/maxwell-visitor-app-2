@@ -32,7 +32,6 @@ except:
 
 app = Flask(__name__)
 app.secret_key = "maxwell2024secret"
-app.config['PERMANENT_SESSION_LIFETIME'] = 86400 * 30
 DB = "maxwell_visitors.db"
 
 SENDER_EMAIL    = "maxwellvisitor05@gmail.com"
@@ -1078,7 +1077,6 @@ def admin_login_page(err):
 def admin_login():
     if request.form.get("pin","") == ADMIN_PIN:
         session["admin_ok"] = True
-        session.permanent = True
         return redirect("/admin")
     return admin_login_page("Wrong PIN! Try again.")
 
@@ -1094,7 +1092,7 @@ def pantry_login():
     if request.method == "POST":
         email = request.form.get("email","").strip()
         pwd   = request.form.get("password","").strip()
-        if pwd == PANTRY_PASSWORD:
+        if email == PANTRY_EMAIL and pwd == PANTRY_PASSWORD:
             session["pantry_ok"] = True
             return redirect("/pantry")
         err = "Wrong credentials!"
@@ -1476,6 +1474,8 @@ def manifest():
         "theme_color": "#1565C0",
         "icons": [{"src": "/icon.png", "sizes": "192x192", "type": "image/png"}]
     })
+
+init_db()  # Initialize DB for gunicorn
 
 if __name__ == "__main__":
     init_db()
