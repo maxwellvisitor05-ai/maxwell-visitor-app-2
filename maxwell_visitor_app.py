@@ -140,10 +140,10 @@ def send_email(to_list, subject, body):
         msg["From"]    = SENDER_EMAIL
         msg["To"]      = ", ".join(to_list)
         msg.attach(MIMEText(body, "html"))
-with smtplib.SMTP("smtp-relay.brevo.com", 2525) as s:
-    s.starttls()
-    s.login(os.environ.get("SMTP_USER"), os.environ.get("SMTP_PASS"))
-    s.sendmail(SENDER_EMAIL, to_list, msg.as_string())
+        with smtplib.SMTP("smtp-relay.brevo.com", 587) as s:
+            s.starttls()
+            s.login(SENDER_EMAIL, SENDER_PASSWORD)
+            s.sendmail(SENDER_EMAIL, to_list, msg.as_string())
         print("Email sent to:", to_list)
     except Exception as e:
         print("Email error:", e)
