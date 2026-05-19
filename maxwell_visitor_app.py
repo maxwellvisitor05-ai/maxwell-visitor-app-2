@@ -35,7 +35,7 @@ app.secret_key = "maxwell2024secret"
 DB = "maxwell_visitors.db"
 
 SENDER_EMAIL    = os.environ.get("SENDER_EMAIL", "maxwellvisitor05@gmail.com")
-SSENDER_PASSWORD = os.environ.get("SENDER_PASSWORD", "uaoffghowmkadfsi")
+SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD", "uaoffghowmkadfsi")
 ADMIN_EMAIL     = os.environ.get("ADMIN_EMAIL", "info@maxwells.in")
 ADMIN_PIN       = os.environ.get("ADMIN_PIN", "1234")
 PANTRY_EMAIL    = os.environ.get("PANTRY_EMAIL", "maxwellvisitor05@gmail.com")
