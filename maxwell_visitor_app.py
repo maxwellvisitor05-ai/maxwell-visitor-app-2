@@ -31,8 +31,10 @@ app = Flask(__name__)
 app.secret_key = "maxwell2024secret"
 DB = "maxwell_visitors.db"
 
-SENDER_EMAIL    = os.environ.get("SENDER_EMAIL", "abc81a001@smtp-brevo.com")
-SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD", "xsmtpsib-0d9349ff85dcbcb8ffc1ab463f99e1c5e11f780be1e91a91a129f70f6c1ec28d-FXgz0FhVSKSiVpvG")
+SMTP_USERNAME   = os.environ.get("SMTP_USERNAME", os.environ.get("SENDER_EMAIL", "abc81a001@smtp-brevo.com"))
+SMTP_PASSWORD   = os.environ.get("SMTP_PASSWORD", os.environ.get("SENDER_PASSWORD", "xsmtpsib-0d9349ff85dcbcb8ffc1ab463f99e1c5e11f780be1e91a91a129f70f6c1ec28d-FXgz0FhVSKSiVpvG"))
+SENDER_EMAIL    = os.environ.get("SENDER_EMAIL", "info@maxwells.in")
+SENDER_NAME     = os.environ.get("SENDER_NAME", "Maxwell Visitor Management")
 ADMIN_EMAIL     = os.environ.get("ADMIN_EMAIL", "info@maxwells.in")
 ADMIN_PIN       = os.environ.get("ADMIN_PIN", "1234")
 PANTRY_EMAIL    = os.environ.get("PANTRY_EMAIL", "maxwellvisitor05@gmail.com")
@@ -91,10 +93,8 @@ PASS_COLORS = {
 DRINKS_MENU = ["Water", "Tea", "Coffee", "Green Tea", "Black Coffee", "Juice", "Other"]
 DEFAULT_PHOTO = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHdpZHRoPSc4MCcgaGVpZ2h0PSc4MCc+PGNpcmNsZSBjeD0nNDAnIGN5PSc0MCcgcj0nNDAnIGZpbGw9JyNlMGUwZTAnLz48dGV4dCB4PSc0MCcgeT0nNTAnIGZvbnQtZmFtaWx5PSdBcmlhbCcgZm9udC1zaXplPSczMicgZmlsbD0nIzk5OScgdGV4dC1hbmNob3I9J21pZGRsZSc+PzwvdGV4dD48L3N2Zz4="
 
-BEEP_JS = """
+BEEP_JS = (
 function _beep(n){
   try{
     var c=new(window.AudioContext||window.webkitAudioContext)();
     var f=[880,660,880,1100,880,660,880];
-    for(var i=0;i<(n||4);i++){(function(x){
-      var o=c.createOscillator(),g=c.createGain();
