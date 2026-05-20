@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""
-Maxwell Engineering Solutions - Visitor Management System v2.0
-"""
+"""Maxwell Engineering Solutions - Visitor Management System v2.0"""
 
 from flask import Flask, request, jsonify, redirect, session, send_file
-import sqlite3, base64, io, threading, os, secrets
-from datetime import datetime
+import sqlite3, base64, io, threading, os
+from datetime import datetime, timezone, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import smtplib
@@ -91,10 +89,31 @@ PASS_COLORS = {
 }
 
 DRINKS_MENU = ["Water", "Tea", "Coffee", "Green Tea", "Black Coffee", "Juice", "Other"]
-
 DEFAULT_PHOTO = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHdpZHRoPSc4MCcgaGVpZ2h0PSc4MCc+PGNpcmNsZSBjeD0nNDAnIGN5PSc0MCcgcj0nNDAnIGZpbGw9JyNlMGUwZTAnLz48dGV4dCB4PSc0MCcgeT0nNTAnIGZvbnQtZmFtaWx5PSdBcmlhbCcgZm9udC1zaXplPSczMicgZmlsbD0nIzk5OScgdGV4dC1hbmNob3I9J21pZGRsZSc+PzwvdGV4dD48L3N2Zz4="
 
-# ── DATABASE ──────────────────────────────────────────────
+BEEP_JS = """
+function _beep(n){
+  try{
+    var c=new(window.AudioContext||window.webkitAudioContext)();
+    var f=[880,660,880,1100,880,660,880];
+    for(var i=0;i<(n||4);i++){(function(x){
+      var o=c.createOscillator(),g=c.createGain();
+      o.connect(g);g.connect(c.destination);
+      o.frequency.value=f[x%f.length];o.type='sine';
+      var t=c.currentTime+x*0.22;
+      g.gain.setValueAtTime(0,t);
+      g.gain.linearRampToValueAtTime(2.0,t+0.05);
+      g.gain.exponentialRampToValueAtTime(0.001,t+0.38);
+      o.start(t);o.stop(t+0.38);
+    })(i);}
+  }catch(e){}
+}
+"""
+
+def get_ist():
+    ist = timezone(timedelta(hours=5, minutes=30))
+    return datetime.now(ist).strftime("%d-%m-%Y %H:%M")
+
 def init_db():
     conn = sqlite3.connect(DB)
     conn.execute("""CREATE TABLE IF NOT EXISTS visitors (
@@ -114,10 +133,10 @@ def init_db():
         created_at TEXT, delivered_at TEXT, timer_start TEXT
     )""")
     for col in ["checkout_at", "advance_token"]:
-        try: conn.execute(f"ALTER TABLE visitors ADD COLUMN {col} TEXT")
+        try: conn.execute("ALTER TABLE visitors ADD COLUMN {} TEXT".format(col))
         except: pass
     for col in ["snacks TEXT", "order_type TEXT DEFAULT 'drink'"]:
-        try: conn.execute(f"ALTER TABLE pantry_orders ADD COLUMN {col}")
+        try: conn.execute("ALTER TABLE pantry_orders ADD COLUMN {}".format(col))
         except: pass
     conn.commit()
     conn.close()
@@ -127,7 +146,6 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
-# ── EMAIL ─────────────────────────────────────────────────
 def send_email(to_list, subject, body):
     try:
         msg = MIMEMultipart("alternative")
@@ -144,8 +162,7 @@ def send_email(to_list, subject, body):
         print("Email error:", e)
 
 def notify_new_visitor(v):
-    """Visitor submit thaay - Admin + Host ne notification"""
-    recipients = [ADMIN_EMAIL]
+    recipients = [ADMIN_EMAIL, HOST_NOTIFY_EMAIL]
     person_email = EMPLOYEE_EMAILS.get(v["person_to_meet"])
     if person_email and person_email not in recipients:
         recipients.append(person_email)
@@ -170,14 +187,10 @@ def notify_new_visitor(v):
     threading.Thread(target=send_email, args=(recipients, "New Visitor: " + str(v["name"]), body), daemon=True).start()
 
 def notify_approved(v, now):
-    """Guest approved - Host + Admin + Pantry ne notification"""
     person_email = EMPLOYEE_EMAILS.get(v["person_to_meet"])
-    
-    # Host + Admin
-    host_recipients = [ADMIN_EMAIL]
-    if person_email:
+    host_recipients = [ADMIN_EMAIL, HOST_NOTIFY_EMAIL]
+    if person_email and person_email not in host_recipients:
         host_recipients.append(person_email)
-    
     host_body = (
         "<div style='font-family:Arial;padding:20px;background:#E8F5E9;border-radius:10px'>"
         "<h2 style='color:#2E7D32'>&#10003; Guest Approved!</h2>"
@@ -187,95 +200,74 @@ def notify_approved(v, now):
         "</div>"
     )
     threading.Thread(target=send_email, args=(host_recipients, "Guest Approved: " + str(v["name"]), host_body), daemon=True).start()
-    
-    # Pantry + Admin - Water serve karo
     pantry_body = (
         "<div style='font-family:Arial;padding:20px;background:#E3F2FD;border-radius:10px'>"
         "<h2 style='color:#1565C0'>&#128100; New Guest Arrived!</h2>"
         "<p><b>Guest:</b> " + str(v["name"]) + "</p>"
         "<p><b>Meeting:</b> " + str(v["person_to_meet"]) + "</p>"
         "<p><b>Time:</b> " + now + "</p>"
-        "<p style='color:#F57F17;font-weight:bold;margin-top:10px'>&#128167; Please serve Water immediately.</p>"
+        "<p style='color:#F57F17;font-weight:bold'>&#128167; Please serve Water immediately.</p>"
         "</div>"
     )
-    threading.Thread(target=send_email, args=([PANTRY_EMAIL, ADMIN_EMAIL], "Guest Arrived - Serve Water: " + str(v["name"]), pantry_body), daemon=True).start()
-    
-    # 5 min baad - Host ne reminder
-    def five_min_reminder():
-        import time
-        time.sleep(300)
-        person_email2 = EMPLOYEE_EMAILS.get(v["person_to_meet"])
-        if person_email2:
-            reminder_body = (
-                "<div style='font-family:Arial;padding:20px;background:#FFF8E1;border-radius:10px'>"
-                "<h3>&#9749; Tea/Coffee Time?</h3>"
-                "<p>Guest <b>" + str(v["name"]) + "</b> has been here 5 minutes.</p>"
-                "<p>Please select a beverage from your dashboard:</p>"
-                "<a href='https://maxwell-visitor-app-2.onrender.com/employee-dashboard' "
-                "style='background:#1565C0;color:white;padding:10px 20px;border-radius:5px;text-decoration:none'>Order Beverage</a>"
-                "</div>"
-            )
-            send_email([person_email2, ADMIN_EMAIL], "5 Min Reminder - " + str(v["name"]), reminder_body)
-    
-    threading.Thread(target=five_min_reminder, daemon=True).start()
+    threading.Thread(target=send_email, args=([PANTRY_EMAIL, ADMIN_EMAIL, HOST_NOTIFY_EMAIL], "Guest Arrived - Serve Water: " + str(v["name"]), pantry_body), daemon=True).start()
+
+    def five_min():
+        import time; time.sleep(300)
+        pe = EMPLOYEE_EMAILS.get(v["person_to_meet"])
+        recip = [ADMIN_EMAIL, HOST_NOTIFY_EMAIL]
+        if pe and pe not in recip: recip.append(pe)
+        rb = (
+            "<div style='font-family:Arial;padding:20px;background:#FFF8E1;border-radius:10px'>"
+            "<h3>&#9749; Tea/Coffee Time?</h3>"
+            "<p>Guest <b>" + str(v["name"]) + "</b> has been here 5 minutes.</p>"
+            "<a href='https://maxwell-visitor-app-2.onrender.com/employee-dashboard' "
+            "style='background:#1565C0;color:white;padding:10px 20px;border-radius:5px;text-decoration:none'>Order Beverage</a>"
+            "</div>"
+        )
+        send_email(recip, "5 Min Reminder - " + str(v["name"]), rb)
+    threading.Thread(target=five_min, daemon=True).start()
 
 def notify_beverage_order(data, now):
-    """Beverage order - Pantry + Admin + Host ne notification"""
     person_email = EMPLOYEE_EMAILS.get(data.get("person_to_meet",""))
-    recipients = [PANTRY_EMAIL, ADMIN_EMAIL]
+    recipients = [PANTRY_EMAIL, ADMIN_EMAIL, HOST_NOTIFY_EMAIL]
     if person_email and person_email not in recipients:
         recipients.append(person_email)
-    
     body = (
         "<div style='font-family:Arial;padding:20px;background:#E3F2FD;border-radius:10px'>"
         "<h3>&#9749; New Beverage Order</h3>"
         "<p><b>Guest:</b> " + str(data.get("visitor_name","")) + "</p>"
         "<p><b>Host:</b> " + str(data.get("person_to_meet","")) + "</p>"
         "<p><b>Drink:</b> " + str(data.get("drink","")) + " x" + str(data.get("quantity",1)) + "</p>"
-        + ("<p><b>Snacks:</b> " + str(data.get("snacks","")) + "</p>" if data.get("snacks") else "") +
-        ("<p><b>Note:</b> " + str(data.get("note","")) + "</p>" if data.get("note") else "") +
-        "<p><b>Time:</b> " + now + "</p>"
-        "<a href='https://maxwell-visitor-app-2.onrender.com/pantry' style='background:#1565C0;color:white;padding:10px 20px;border-radius:5px;text-decoration:none;display:inline-block;margin-top:10px'>View Pantry Dashboard</a>"
-        "</div>"
+        + ("<p><b>Snacks:</b> " + str(data.get("snacks","")) + "</p>" if data.get("snacks") else "")
+        + ("<p><b>Note:</b> " + str(data.get("note","")) + "</p>" if data.get("note") else "")
+        + "<p><b>Time:</b> " + now + "</p></div>"
     )
     threading.Thread(target=send_email, args=(recipients, "Beverage Order: " + str(data.get("visitor_name","")), body), daemon=True).start()
 
-# ── QR ────────────────────────────────────────────────────
 def make_qr(data):
-    if not HAS_QR:
-        return ""
+    if not HAS_QR: return ""
     qr = qrcode.QRCode(version=1, box_size=4, border=2)
-    qr.add_data(data)
-    qr.make(fit=True)
+    qr.add_data(data); qr.make(fit=True)
     img = qr.make_image(fill_color="black", back_color="white")
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
+    buf = io.BytesIO(); img.save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode()
 
-# ── SCHEDULER ─────────────────────────────────────────────
 def send_daily_summary():
     try:
-        today = datetime.now().strftime("%d-%m-%Y")
+        today = get_ist()[:10]
         conn = get_db()
         visitors = [dict(r) for r in conn.execute(
             "SELECT * FROM visitors WHERE created_at LIKE ?", (today + "%",)
         ).fetchall()]
         conn.close()
-        if not visitors:
-            return
-        rows = ""
-        for v in visitors:
-            co = v["checkout_at"] or "-"
-            rows += "<tr><td>" + str(v["name"]) + "</td><td>" + str(v["phone"]) + "</td><td>" + str(v["department"]) + "</td><td>" + str(v["person_to_meet"]) + "</td><td>" + str(v["status"]) + "</td><td>" + str(v["created_at"]) + "</td><td>" + co + "</td></tr>"
-        body = (
-            "<div style='font-family:Arial;max-width:750px;margin:auto'>"
-            "<div style='background:#1565C0;color:white;padding:20px;text-align:center'>"
-            "<h2>Maxwell Engineering Solutions</h2><p>Daily Visitor Summary — " + today + "</p></div>"
-            "<div style='padding:20px'><p>Total Visitors: <b>" + str(len(visitors)) + "</b></p>"
+        if not visitors: return
+        rows = "".join("<tr><td style='padding:6px'>" + str(v["name"]) + "</td><td>" + str(v["department"]) + "</td><td>" + str(v["person_to_meet"]) + "</td><td>" + str(v["status"]) + "</td><td>" + str(v["created_at"]) + "</td><td>" + (v["checkout_at"] or "-") + "</td></tr>" for v in visitors)
+        body = ("<div style='font-family:Arial;max-width:750px;margin:auto'>"
+            "<div style='background:#1565C0;color:white;padding:20px;text-align:center'><h2>Maxwell Engineering Solutions</h2><p>Daily Summary — " + today + "</p></div>"
+            "<div style='padding:20px'><p>Total: <b>" + str(len(visitors)) + "</b></p>"
             "<table style='width:100%;border-collapse:collapse;margin-top:15px'>"
-            "<tr style='background:#1565C0;color:white'><th style='padding:8px'>Name</th><th>Phone</th><th>Dept</th><th>Meeting</th><th>Status</th><th>In</th><th>Out</th></tr>"
-            + rows + "</table></div></div>"
-        )
+            "<tr style='background:#1565C0;color:white'><th style='padding:8px'>Name</th><th>Dept</th><th>Meeting</th><th>Status</th><th>In</th><th>Out</th></tr>"
+            + rows + "</table></div></div>")
         send_email([ADMIN_EMAIL, HOST_NOTIFY_EMAIL], "Daily Summary — " + today, body)
     except Exception as e:
         print("Daily summary error:", e)
@@ -285,12 +277,11 @@ if HAS_SCHEDULER:
         scheduler = BackgroundScheduler()
         scheduler.add_job(send_daily_summary, 'cron', hour=18, minute=0)
         scheduler.start()
-    except:
-        pass
+    except: pass
 
-# ═══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 # VISITOR FORM
-# ═══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 @app.route("/")
 def index():
     return build_visitor_form({})
@@ -299,15 +290,11 @@ def build_visitor_form(prefill):
     pname  = prefill.get("name","")
     pphone = prefill.get("phone","")
     ppurp  = prefill.get("purpose","")
-    depts_js   = str(DEPARTMENTS).replace("'", '"')
-    factory_js = str(FACTORY_DEPTS).replace("'", '"')
-    mgmt_js    = str(MANAGEMENT_LIST).replace("'", '"')
-
-    return """<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+    depts_js   = str(DEPARTMENTS).replace("'",'"')
+    factory_js = str(FACTORY_DEPTS).replace("'",'"')
+    mgmt_js    = str(MANAGEMENT_LIST).replace("'",'"')
+    return ("""<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Maxwell - Visitor Management</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -337,9 +324,7 @@ input:focus,textarea:focus{border-color:#1565C0;background:white}
 #photo-preview{width:100px;height:100px;border-radius:50%;object-fit:cover;border:3px solid #1565C0;display:none;margin:8px auto}
 #ph-icon{font-size:55px;color:#ddd;margin:6px 0;display:block}
 .btn{padding:8px 16px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;margin:3px}
-.btn-blue{background:#1565C0;color:white}
-.btn-green{background:#2E7D32;color:white}
-.btn-red{background:#C62828;color:white}
+.btn-blue{background:#1565C0;color:white}.btn-green{background:#2E7D32;color:white}.btn-red{background:#C62828;color:white}
 .submit-btn{width:100%;padding:14px;font-size:15px;border-radius:10px;background:linear-gradient(135deg,#1565C0,#1976D2);color:white;border:none;cursor:pointer;font-weight:700;letter-spacing:1px}
 .alert{padding:11px 16px;border-radius:8px;margin-bottom:12px;font-size:14px;font-weight:500}
 .alert-error{background:#ffebee;color:#C62828;border:1px solid #ef9a9a}
@@ -347,13 +332,9 @@ input:focus,textarea:focus{border-color:#1565C0;background:white}
 .history-item{background:#f5f5f5;border-radius:8px;padding:10px;margin-bottom:8px;cursor:pointer;border:1.5px solid #ddd}
 .history-item:hover{border-color:#1565C0;background:#e3f2fd}
 @media(max-width:540px){.row2{grid-template-columns:1fr}}
-</style>
-</head>
-<body>
+</style></head><body>
 <div class="header">
-  <div>
-    <div class="hdr-title"><h1>Maxwell Visitor Management</h1><p>Maxwell Engineering Solutions</p></div>
-  </div>
+  <div class="hdr-title"><h1>Maxwell Visitor Management</h1><p>Maxwell Engineering Solutions</p></div>
   <div class="nav"><a href="/admin">Admin</a><a href="/employee-login">Employee</a><a href="/pantry-login">Pantry</a></div>
 </div>
 <div class="container">
@@ -422,11 +403,8 @@ input:focus,textarea:focus{border-color:#1565C0;background:white}
   </div>
 </div>
 <script>
-var DEPTS=DEPTS_JS;
-var FACTORY=FACTORY_JS;
-var MGMT=MGMT_JS;
+var DEPTS=DEPTS_JS;var FACTORY=FACTORY_JS;var MGMT=MGMT_JS;
 var photoData=null,camStream=null,selDept="",selPerson="";
-
 function searchHistory(){
   var phone=document.getElementById('v-phone').value.trim();
   if(phone.length<10)return;
@@ -436,7 +414,7 @@ function searchHistory(){
       d.visitors.forEach(function(v){
         html+='<div class="history-item" onclick="fillHistory('+JSON.stringify(v)+')">';
         html+='<strong>'+v.name+'</strong> — '+v.purpose+'<br>';
-        html+='<small style="color:#888">Last visit: '+v.created_at+'</small></div>';
+        html+='<small style="color:#888">Last: '+v.created_at+'</small></div>';
       });
       document.getElementById('history-list').innerHTML=html;
       document.getElementById('history-section').classList.remove('hidden');
@@ -450,44 +428,25 @@ function fillHistory(v){
   document.getElementById('history-section').classList.add('hidden');
 }
 function clearHistory(){document.getElementById('history-section').classList.add('hidden');}
-
 function onCat(){
-  var cat=document.querySelector('input[name="category"]:checked');
-  if(!cat)return;
-  var val=cat.value;
-  selDept='';selPerson='';
+  var cat=document.querySelector('input[name="category"]:checked');if(!cat)return;
+  var val=cat.value;selDept='';selPerson='';
   document.getElementById('dept-card').classList.add('hidden');
   document.getElementById('person-card').classList.add('hidden');
   document.getElementById('dept-group').innerHTML='';
   document.getElementById('person-group').innerHTML='';
-  if(val==='Factory Visit'){
-    document.getElementById('dept-card').classList.remove('hidden');
-    Object.keys(FACTORY).forEach(function(d){addChip('dept-group',d,function(){selectDept(d,val);});});
-  }else if(val==='Staff Visit'){
-    document.getElementById('dept-card').classList.remove('hidden');
-    Object.keys(DEPTS).forEach(function(d){addChip('dept-group',d,function(){selectDept(d,val);});});
-  }else if(val==='Management'){
-    document.getElementById('person-card').classList.remove('hidden');
-    showPersons(MGMT);
-  }
+  if(val==='Factory Visit'){document.getElementById('dept-card').classList.remove('hidden');Object.keys(FACTORY).forEach(function(d){addChip('dept-group',d,function(){selectDept(d,val);});});}
+  else if(val==='Staff Visit'){document.getElementById('dept-card').classList.remove('hidden');Object.keys(DEPTS).forEach(function(d){addChip('dept-group',d,function(){selectDept(d,val);});});}
+  else if(val==='Management'){document.getElementById('person-card').classList.remove('hidden');showPersons(MGMT);}
 }
-function addChip(groupId,label,onclick){
-  var el=document.createElement('div');
-  el.className='chip';el.textContent=label;
-  el.onclick=function(){el.onclick=onclick;onclick();};
-  document.getElementById(groupId).appendChild(el);
-}
+function addChip(g,l,fn){var el=document.createElement('div');el.className='chip';el.textContent=l;el.onclick=function(){el.onclick=fn;fn();};document.getElementById(g).appendChild(el);}
 function selectDept(dept,cat){
   selDept=dept;selPerson='';
   document.querySelectorAll('#dept-group .chip').forEach(function(c){c.classList.remove('selected');});
   event.target.classList.add('selected');
   document.getElementById('person-group').innerHTML='';
   document.getElementById('others-input').classList.add('hidden');
-  if(dept==='Others'){
-    document.getElementById('person-card').classList.remove('hidden');
-    document.getElementById('others-input').classList.remove('hidden');
-    return;
-  }
+  if(dept==='Others'){document.getElementById('person-card').classList.remove('hidden');document.getElementById('others-input').classList.remove('hidden');return;}
   document.getElementById('person-card').classList.remove('hidden');
   var list=(cat==='Factory Visit')?FACTORY[dept]:DEPTS[dept];
   if(list)showPersons(list);
@@ -496,57 +455,34 @@ function showPersons(list){
   var pg=document.getElementById('person-group');pg.innerHTML='';
   list.forEach(function(p){
     var c=document.createElement('div');c.className='chip';c.textContent=p;
-    c.onclick=function(){
-      selPerson=p;
-      document.querySelectorAll('#person-group .chip').forEach(function(x){x.classList.remove('selected');});
-      c.classList.add('selected');
-    };
+    c.onclick=function(){selPerson=p;document.querySelectorAll('#person-group .chip').forEach(function(x){x.classList.remove('selected');});c.classList.add('selected');};
     pg.appendChild(c);
   });
 }
 async function startCam(){
-  try{
-    camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'}});
-    document.getElementById('video').srcObject=camStream;
-    document.getElementById('video').style.display='block';
-    document.getElementById('ph-icon').style.display='none';
-    document.getElementById('photo-preview').style.display='none';
-    document.getElementById('cap-btn').style.display='';
-    document.getElementById('ret-btn').style.display='none';
+  try{camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'}});
+    document.getElementById('video').srcObject=camStream;document.getElementById('video').style.display='block';
+    document.getElementById('ph-icon').style.display='none';document.getElementById('photo-preview').style.display='none';
+    document.getElementById('cap-btn').style.display='';document.getElementById('ret-btn').style.display='none';
   }catch(e){alert('Camera access denied!');}
 }
 function capPhoto(){
   var v=document.getElementById('video'),c=document.getElementById('canvas');
-  c.width=v.videoWidth||320;c.height=v.videoHeight||320;
-  c.getContext('2d').drawImage(v,0,0);
+  c.width=v.videoWidth||320;c.height=v.videoHeight||320;c.getContext('2d').drawImage(v,0,0);
   photoData=c.toDataURL('image/jpeg',0.8);
-  document.getElementById('photo-preview').src=photoData;
-  document.getElementById('photo-preview').style.display='block';
-  document.getElementById('video').style.display='none';
-  document.getElementById('cap-btn').style.display='none';
-  document.getElementById('ret-btn').style.display='';
-  if(camStream)camStream.getTracks().forEach(function(t){t.stop();});
+  document.getElementById('photo-preview').src=photoData;document.getElementById('photo-preview').style.display='block';
+  document.getElementById('video').style.display='none';document.getElementById('cap-btn').style.display='none';
+  document.getElementById('ret-btn').style.display='';if(camStream)camStream.getTracks().forEach(function(t){t.stop();});
 }
-function retake(){
-  photoData=null;
-  document.getElementById('photo-preview').style.display='none';
-  document.getElementById('ret-btn').style.display='none';
-  document.getElementById('ph-icon').style.display='block';
-  startCam();
-}
-function showAlert(msg){
-  document.getElementById('alert-box').innerHTML='<div class="alert alert-error">'+msg+'</div>';
-  setTimeout(function(){document.getElementById('alert-box').innerHTML='';},5000);
-}
+function retake(){photoData=null;document.getElementById('photo-preview').style.display='none';document.getElementById('ret-btn').style.display='none';document.getElementById('ph-icon').style.display='block';startCam();}
+function showAlert(msg){document.getElementById('alert-box').innerHTML='<div class="alert alert-error">'+msg+'</div>';setTimeout(function(){document.getElementById('alert-box').innerHTML='';},5000);}
 async function submitForm(){
   var name=document.getElementById('v-name').value.trim();
   var phone=document.getElementById('v-phone').value.trim();
   var purpose=document.getElementById('v-purpose').value.trim();
   var host=document.getElementById('v-host').value.trim();
-  var catEl=document.querySelector('input[name="category"]:checked');
-  var cat=catEl?catEl.value:'';
-  var dept=selDept||'Management';
-  var person=selPerson;
+  var catEl=document.querySelector('input[name="category"]:checked');var cat=catEl?catEl.value:'';
+  var dept=selDept||'Management';var person=selPerson;
   if(dept==='Others')person=document.getElementById('v-others').value.trim();
   if(!name){showAlert('Please enter visitor name!');return;}
   if(!phone){showAlert('Please enter phone number!');return;}
@@ -557,41 +493,31 @@ async function submitForm(){
     var res=await fetch('/api/visitor',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({name:name,phone:phone,purpose:purpose,host_name:host,category:cat,department:dept,person_to_meet:person,photo:photoData})});
     var data=await res.json();
-    if(data.success){
-      document.getElementById('form-section').classList.add('hidden');
-      document.getElementById('submitted-section').classList.remove('hidden');
-    }else{showAlert('Error: '+(data.error||'Unknown error'));}
+    if(data.success){document.getElementById('form-section').classList.add('hidden');document.getElementById('submitted-section').classList.remove('hidden');}
+    else{showAlert('Error: '+(data.error||'Unknown error'));}
   }catch(e){showAlert('Server error!');}
 }
-</script>
-</body>
-</html>""".replace("DEPTS_JS", depts_js).replace("FACTORY_JS", factory_js).replace("MGMT_JS", mgmt_js).replace("PNAME", pname).replace("PPHONE", pphone).replace("PPURP", ppurp)
+</script></body></html>""").replace("DEPTS_JS",depts_js).replace("FACTORY_JS",factory_js).replace("MGMT_JS",mgmt_js).replace("PNAME",pname).replace("PPHONE",pphone).replace("PPURP",ppurp)
 
 @app.route("/api/history")
 def visitor_history():
     phone = request.args.get("phone","")
     conn = get_db()
-    visitors = [dict(r) for r in conn.execute(
-        "SELECT name,phone,purpose,host_name,created_at FROM visitors WHERE phone=? ORDER BY id DESC LIMIT 3",(phone,)
-    ).fetchall()]
+    visitors = [dict(r) for r in conn.execute("SELECT name,phone,purpose,host_name,created_at FROM visitors WHERE phone=? ORDER BY id DESC LIMIT 3",(phone,)).fetchall()]
     conn.close()
     return jsonify({"visitors": visitors})
 
 @app.route("/api/visitor", methods=["POST"])
 def create_visitor():
     data = request.get_json()
-    now = datetime.now().strftime("%d-%m-%Y %H:%M")
+    now = get_ist()
     conn = get_db()
     c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM visitors")
     count = c.fetchone()[0] + 1
     pass_num = "MW-" + datetime.now().strftime("%Y%m%d") + "-" + str(count).zfill(4)
-    c.execute(
-        "INSERT INTO visitors (name,phone,purpose,host_name,category,department,person_to_meet,photo,created_at,pass_number) VALUES (?,?,?,?,?,?,?,?,?,?)",
-        (data.get("name"),data.get("phone"),data.get("purpose"),data.get("host_name"),
-         data.get("category"),data.get("department"),data.get("person_to_meet"),
-         data.get("photo"),now,pass_num)
-    )
+    c.execute("INSERT INTO visitors (name,phone,purpose,host_name,category,department,person_to_meet,photo,created_at,pass_number) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (data.get("name"),data.get("phone"),data.get("purpose"),data.get("host_name"),data.get("category"),data.get("department"),data.get("person_to_meet"),data.get("photo"),now,pass_num))
     vid = c.lastrowid
     conn.commit()
     v = dict(conn.execute("SELECT * FROM visitors WHERE id=?",(vid,)).fetchone())
@@ -606,58 +532,53 @@ def pending_count():
     conn.close()
     return jsonify({"count": row["cnt"]})
 
+@app.route("/api/order-count")
+def order_count():
+    conn = get_db()
+    row = conn.execute("SELECT COUNT(*) as cnt FROM pantry_orders WHERE status='pending'").fetchone()
+    latest = conn.execute("SELECT visitor_name,person_to_meet,drink,quantity,snacks,created_at FROM pantry_orders ORDER BY id DESC LIMIT 1").fetchone()
+    conn.close()
+    result = {"count": row["cnt"]}
+    if latest: result["latest"] = dict(latest)
+    return jsonify(result)
+
 @app.route("/action/<int:vid>/<action>")
 def do_action(vid, action):
-    if action not in ("approve","reject"):
-        return "Invalid", 400
+    if action not in ("approve","reject"): return "Invalid", 400
     conn = get_db()
     conn.execute("UPDATE visitors SET status=? WHERE id=?", (action+"d", vid))
     conn.commit()
     if action == "approve":
         v = dict(conn.execute("SELECT * FROM visitors WHERE id=?",(vid,)).fetchone())
         conn.close()
-        now = datetime.now().strftime("%d-%m-%Y %H:%M")
+        now = get_ist()
         conn2 = get_db()
-        conn2.execute(
-            "INSERT INTO pantry_orders (visitor_id,visitor_name,person_to_meet,drink,quantity,note,created_at,order_type) VALUES (?,?,?,?,?,?,?,?)",
-            (vid, v["name"], v["person_to_meet"], "Water", 1, "Guest arrived", now, "arrival")
-        )
-        conn2.commit()
-        conn2.close()
+        conn2.execute("INSERT INTO pantry_orders (visitor_id,visitor_name,person_to_meet,drink,quantity,note,created_at,order_type) VALUES (?,?,?,?,?,?,?,?)",
+            (vid, v["name"], v["person_to_meet"], "Water", 1, "Guest arrived", now, "arrival"))
+        conn2.commit(); conn2.close()
         notify_approved(v, now)
     else:
         conn.close()
     if "application/json" in request.headers.get("Accept",""):
         return jsonify({"success": True})
-    return (
-        "<h2 style='text-align:center;margin-top:80px;font-family:Arial;color:#1565C0'>"
-        "Visitor " + action.title() + "d!<br><br>"
-        "<a href='/admin'>Admin Panel</a> &nbsp;|&nbsp; "
-        "<a href='/pass/" + str(vid) + "'>View Pass</a></h2>"
-    )
+    return "<h2 style='text-align:center;margin-top:80px;font-family:Arial;color:#1565C0'>Visitor " + action.title() + "d!<br><br><a href='/admin'>Admin Panel</a> &nbsp;|&nbsp; <a href='/pass/" + str(vid) + "'>View Pass</a></h2>"
 
 @app.route("/api/checkout/<int:vid>", methods=["POST"])
 def checkout_visitor(vid):
-    now = datetime.now().strftime("%d-%m-%Y %H:%M")
+    now = get_ist()
     conn = get_db()
     conn.execute("UPDATE visitors SET checkout_at=? WHERE id=?",(now,vid))
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
     return jsonify({"success": True, "checkout_at": now})
 
 @app.route("/api/beverage", methods=["POST"])
 def order_beverage():
     data = request.get_json()
-    now = datetime.now().strftime("%d-%m-%Y %H:%M")
+    now = get_ist()
     conn = get_db()
-    conn.execute(
-        "INSERT INTO pantry_orders (visitor_id,visitor_name,person_to_meet,drink,snacks,quantity,note,created_at,order_type) VALUES (?,?,?,?,?,?,?,?,?)",
-        (data.get("visitor_id"),data.get("visitor_name"),data.get("person_to_meet"),
-         data.get("drink",""),data.get("snacks",""),data.get("quantity",1),
-         data.get("note",""),now,"order")
-    )
-    conn.commit()
-    conn.close()
+    conn.execute("INSERT INTO pantry_orders (visitor_id,visitor_name,person_to_meet,drink,snacks,quantity,note,created_at,order_type) VALUES (?,?,?,?,?,?,?,?,?)",
+        (data.get("visitor_id"),data.get("visitor_name"),data.get("person_to_meet"),data.get("drink",""),data.get("snacks",""),data.get("quantity",1),data.get("note",""),now,"order"))
+    conn.commit(); conn.close()
     notify_beverage_order(data, now)
     return jsonify({"success": True})
 
@@ -666,17 +587,15 @@ def show_pass(vid):
     conn = get_db()
     row = conn.execute("SELECT * FROM visitors WHERE id=?",(vid,)).fetchone()
     conn.close()
-    if not row:
-        return "Not found", 404
+    if not row: return "Not found", 404
     v = dict(row)
     if v["status"] != "approved":
-        return "<h2 style='text-align:center;margin-top:80px;font-family:Arial;color:#C62828'>Pass not available. Must be approved first.<br><br><a href='/admin' style='color:#1565C0'>Admin Panel</a></h2>"
+        return "<h2 style='text-align:center;margin-top:80px;font-family:Arial;color:#C62828'>Pass not available.<br><br><a href='/admin' style='color:#1565C0'>Admin Panel</a></h2>"
     bg, fg, label = PASS_COLORS.get(v["category"], ("1565C0","FFFFFF","VISITOR"))
     photo = v.get("photo") or DEFAULT_PHOTO
     qr = make_qr("Maxwell\nName: " + v["name"] + "\nPass: " + v["pass_number"] + "\nTime: " + v["created_at"])
     qr_img = '<img src="data:image/png;base64,' + qr + '" width="90">' if qr else ""
-    return (
-        "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Visitor Pass</title>"
+    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Visitor Pass</title>"
         "<style>*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}"
         "body{font-family:Arial;background:#f0f0f0;display:flex;justify-content:center;padding:30px;flex-direction:column;align-items:center}"
         ".pass{width:370px;border-radius:14px;overflow:hidden;box-shadow:0 8px 25px rgba(0,0,0,0.2)}"
@@ -700,7 +619,7 @@ def show_pass(vid):
         "<div class='il'>Department</div><div class='iv'>" + str(v["department"]) + "</div>"
         "<div class='il'>Person to Meet</div><div class='iv'>" + str(v["person_to_meet"]) + "</div>"
         "<div class='il'>Purpose</div><div class='iv'>" + str(v["purpose"]) + "</div>"
-        "<div class='il'>Date & Time</div><div class='iv'>" + str(v["created_at"]) + "</div>"
+        "<div class='il'>Date & Time (IST)</div><div class='iv'>" + str(v["created_at"]) + "</div>"
         "<div style='text-align:center;margin-top:12px'>" + qr_img + "</div>"
         "<div class='appr'>&#10003; APPROVED</div></div>"
         "<div class='pf'>Maxwell Engineering Solutions | Visitor Management System</div></div>"
@@ -708,36 +627,28 @@ def show_pass(vid):
         "<button onclick='window.print()' style='background:#1565C0;color:white;padding:10px 20px;border:none;border-radius:7px;cursor:pointer;font-size:14px'>Print Pass</button>"
         "<button onclick='window.close()' style='background:#666;color:white;padding:10px 20px;border:none;border-radius:7px;cursor:pointer;font-size:14px;margin-left:10px'>Close</button>"
         "</div><script>setTimeout(function(){window.print();},600);</script>"
-        "</body></html>"
-    )
+        "</body></html>")
 
 # ── ADMIN ─────────────────────────────────────────────────
 def admin_login_page(err):
-    return (
-        "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Admin Login</title>"
-        "<style>body{font-family:Arial;background:#f0f4f8}"
-        ".header{background:#1565C0;color:white;padding:13px 25px}"
+    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Admin Login</title>"
+        "<style>body{font-family:Arial;background:#f0f4f8}.header{background:#1565C0;color:white;padding:13px 25px}"
         ".box{max-width:380px;margin:70px auto;background:white;padding:38px;border-radius:13px;box-shadow:0 5px 18px rgba(0,0,0,0.1);text-align:center}"
-        ".box h2{color:#1565C0;margin-bottom:22px}"
-        "input{width:100%;padding:11px;border:2px solid #e0e0e0;border-radius:7px;font-size:15px;margin-bottom:14px}"
-        "input:focus{outline:none;border-color:#1565C0}"
-        "button{width:100%;padding:12px;background:#1565C0;color:white;border:none;border-radius:7px;font-size:15px;font-weight:700;cursor:pointer}"
-        ".err{color:red;font-size:13px;margin-top:8px}"
-        "a{display:block;margin-top:13px;color:#1565C0;font-size:13px}"
+        ".box h2{color:#1565C0;margin-bottom:22px}input{width:100%;padding:11px;border:2px solid #e0e0e0;border-radius:7px;font-size:15px;margin-bottom:14px}"
+        "input:focus{outline:none;border-color:#1565C0}button{width:100%;padding:12px;background:#1565C0;color:white;border:none;border-radius:7px;font-size:15px;font-weight:700;cursor:pointer}"
+        ".err{color:red;font-size:13px;margin-top:8px}a{display:block;margin-top:13px;color:#1565C0;font-size:13px}"
         "</style></head><body>"
         "<div class='header'><h1>Maxwell Engineering Solutions</h1></div>"
         "<div class='box'><h2>Admin Login</h2>"
         "<form method='POST' action='/admin-login'>"
         "<input type='password' name='pin' placeholder='Enter Admin PIN'>"
         "<button type='submit'>LOGIN</button></form>"
-        + ("<p class='err'>" + err + "</p>" if err else "") +
-        "<a href='/'>Back to Visitor Form</a></div></body></html>"
-    )
+        + ("<p class='err'>" + err + "</p>" if err else "")
+        + "<a href='/'>Back to Visitor Form</a></div></body></html>")
 
 @app.route("/admin")
 def admin():
-    if not session.get("admin_ok"):
-        return admin_login_page("")
+    if not session.get("admin_ok"): return admin_login_page("")
     session.modified = True
     tab = request.args.get("tab","pending")
     conn = get_db()
@@ -748,6 +659,7 @@ def admin():
     counts = {}
     for r in conn.execute("SELECT status,COUNT(*) as cnt FROM visitors GROUP BY status").fetchall():
         counts[r["status"]] = r["cnt"]
+    recent_orders = [dict(r) for r in conn.execute("SELECT * FROM pantry_orders ORDER BY id DESC LIMIT 10").fetchall()]
     conn.close()
     pc = counts.get("pending",0); ac = counts.get("approved",0); rc = counts.get("rejected",0)
 
@@ -757,32 +669,40 @@ def admin():
         photo = v["photo"] if v["photo"] else DEFAULT_PHOTO
         ab = ""
         if v["status"] == "pending":
-            ab += '<button class="btn ba" onclick="act('+str(v["id"])+',' + "'approve'" + ')">&#10003; Approve</button>'
-            ab += '<button class="btn br" onclick="act('+str(v["id"])+',' + "'reject'" + ')">&#10005; Reject</button>'
+            ab += '<button class="btn ba" onclick="act('+str(v["id"])+",'approve'"+ ')">&#10003; Approve</button>'
+            ab += '<button class="btn br" onclick="act('+str(v["id"])+",'reject'"+ ')">&#10005; Reject</button>'
         if v["status"] == "approved" and not v.get("checkout_at"):
             ab += '<button class="btn bc" onclick="checkout('+str(v["id"])+')">&#128682; Checkout</button>'
         ab += '<button class="btn bp" onclick="window.open(\'/pass/'+str(v["id"])+'\')">Pass</button>'
         co = v.get("checkout_at") or "-"
-        rows += (
-            "<tr><td><img src='" + photo + "' style='width:42px;height:42px;border-radius:50%;object-fit:cover;border:2px solid #ddd'></td>"
-            "<td><strong>" + str(v["name"]) + "</strong></td>"
-            "<td>" + str(v["phone"]) + "</td>"
-            "<td>" + str(v["category"]) + "</td>"
-            "<td>" + str(v["department"]) + "</td>"
+        rows += ("<tr><td><img src='" + photo + "' style='width:42px;height:42px;border-radius:50%;object-fit:cover;border:2px solid #ddd'></td>"
+            "<td><strong>" + str(v["name"]) + "</strong></td><td>" + str(v["phone"]) + "</td>"
+            "<td>" + str(v["category"]) + "</td><td>" + str(v["department"]) + "</td>"
             "<td>" + str(v["person_to_meet"]) + "</td>"
             "<td style='font-size:11px'>" + str(v["created_at"]) + "</td>"
             "<td style='font-size:11px'>" + co + "</td>"
             "<td><span class='badge " + bc + "'>" + v["status"].upper() + "</span></td>"
-            "<td>" + ab + "</td></tr>"
-        )
-    if not rows:
-        rows = '<tr><td colspan="10" style="text-align:center;padding:25px;color:#999">No records</td></tr>'
+            "<td>" + ab + "</td></tr>")
+    if not rows: rows = '<tr><td colspan="10" style="text-align:center;padding:25px;color:#999">No records</td></tr>'
+
+    order_rows = ""
+    for o in recent_orders:
+        sb = "pending" if o["status"]=="pending" else "delivered"
+        drink_info = str(o.get("drink","")) + " x" + str(o.get("quantity",""))
+        snacks_info = str(o.get("snacks","")) if o.get("snacks") else "-"
+        order_rows += ("<tr><td><strong>" + str(o["visitor_name"]) + "</strong></td>"
+            "<td>" + str(o["person_to_meet"]) + "</td>"
+            "<td>" + drink_info + "</td>"
+            "<td>" + snacks_info + "</td>"
+            "<td style='font-size:11px'>" + str(o["created_at"]) + "</td>"
+            "<td><span class='badge " + sb + "'>" + o["status"].upper() + "</span></td></tr>")
+    if not order_rows: order_rows = '<tr><td colspan="6" style="text-align:center;padding:15px;color:#999">No orders</td></tr>'
 
     tab_a = {"pending":"","approved":"","rejected":"","all":""}
     tab_a[tab] = "active"
+    depts_options = "".join('<option value="' + d + '">' + d + '</option>' for d in DEPARTMENTS)
 
-    return (
-        "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Maxwell Admin</title>"
+    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Maxwell Admin</title>"
         "<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial;background:#f0f4f8}"
         ".header{background:#1565C0;color:white;padding:13px 25px;display:flex;justify-content:space-between;align-items:center}"
         ".header h1{font-size:18px}"
@@ -792,29 +712,42 @@ def admin():
         ".stat{background:white;border-radius:9px;padding:18px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,0.07)}"
         ".stat-n{font-size:34px;font-weight:900}.stat-l{font-size:12px;color:#666;margin-top:4px}"
         ".pend{color:#F57F17}.appr{color:#2E7D32}.reje{color:#C62828}"
+        ".filter-bar{background:white;padding:15px;border-radius:9px;margin-bottom:15px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;box-shadow:0 2px 8px rgba(0,0,0,0.07)}"
+        ".filter-bar input,.filter-bar select{padding:8px 12px;border:1.5px solid #ddd;border-radius:6px;font-size:13px}"
+        ".filter-bar button{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600}"
         ".tabs{display:flex;gap:4px;margin-bottom:15px}"
         ".tab{padding:9px 18px;border:none;border-radius:7px 7px 0 0;cursor:pointer;font-weight:600;font-size:13px;background:#ddd;color:#555}"
         ".tab.active{background:white;color:#1565C0}"
-        ".card{background:white;border-radius:9px;padding:18px;box-shadow:0 2px 8px rgba(0,0,0,0.07);overflow-x:auto}"
-        "table{width:100%;border-collapse:collapse;min-width:950px}"
+        ".card{background:white;border-radius:9px;padding:18px;box-shadow:0 2px 8px rgba(0,0,0,0.07);overflow-x:auto;margin-bottom:15px}"
+        ".card h3{color:#1565C0;margin-bottom:14px;font-size:15px}"
+        "table{width:100%;border-collapse:collapse;min-width:900px}"
+        ".order-table{min-width:500px}"
         "th{background:#1565C0;color:white;padding:11px;text-align:left;font-size:12px}"
         "td{padding:9px;border-bottom:1px solid #eee;font-size:13px;vertical-align:middle}"
         "tr:hover td{background:#f9f9f9}"
         ".badge{display:inline-block;padding:3px 9px;border-radius:11px;font-size:11px;font-weight:700}"
-        ".badge.pending{background:#FFF8E1;color:#F57F17}"
-        ".badge.approved{background:#E8F5E9;color:#2E7D32}"
-        ".badge.rejected{background:#FFEBEE;color:#C62828}"
+        ".badge.pending{background:#FFF8E1;color:#F57F17}.badge.approved{background:#E8F5E9;color:#2E7D32}"
+        ".badge.rejected{background:#FFEBEE;color:#C62828}.badge.delivered{background:#E8F5E9;color:#2E7D32}"
         ".btn{padding:5px 10px;border:none;border-radius:5px;cursor:pointer;font-size:11px;font-weight:600;margin:2px}"
         ".ba{background:#2E7D32;color:white}.br{background:#C62828;color:white}"
         ".bp{background:#1565C0;color:white}.bc{background:#FF6F00;color:white}"
+        ".notif-banner{background:#FFF8E1;border:2px solid #F57F17;border-radius:9px;padding:12px 18px;margin-bottom:15px;display:none;font-weight:700;color:#E65100;font-size:14px}"
         "</style></head><body>"
         "<div class='header'><h1>Maxwell Admin Panel</h1>"
-        "<div><a href='/pantry'>&#9749; Pantry</a><a href='/'>Visitor Form</a><a href='/admin-logout'>Logout</a></div></div>"
+        "<div><a href='/admin/export'>&#128196; Export Excel</a><a href='/pantry'>&#9749; Pantry</a><a href='/'>Visitor Form</a><a href='/admin-logout'>Logout</a></div></div>"
         "<div class='container'>"
+        "<div class='notif-banner' id='notif-banner'></div>"
         "<div class='stats'>"
         "<div class='stat'><div class='stat-n pend'>" + str(pc) + "</div><div class='stat-l'>Pending</div></div>"
         "<div class='stat'><div class='stat-n appr'>" + str(ac) + "</div><div class='stat-l'>Approved</div></div>"
         "<div class='stat'><div class='stat-n reje'>" + str(rc) + "</div><div class='stat-l'>Rejected</div></div>"
+        "</div>"
+        "<div class='filter-bar'>"
+        "<span style='font-weight:600;font-size:13px'>Export:</span>"
+        "<input type='date' id='f-from'><input type='date' id='f-to'>"
+        "<select id='f-dept'><option value=''>All Departments</option>" + depts_options + "</select>"
+        "<select id='f-status'><option value=''>All Status</option><option value='pending'>Pending</option><option value='approved'>Approved</option><option value='rejected'>Rejected</option></select>"
+        "<button onclick='exportExcel()' style='background:#2E7D32;color:white'>&#128196; Export Excel</button>"
         "</div>"
         "<div class='tabs'>"
         "<button class='tab " + tab_a["pending"] + "' onclick=\"location='?tab=pending'\">Pending (" + str(pc) + ")</button>"
@@ -824,43 +757,36 @@ def admin():
         "</div>"
         "<div class='card'><table>"
         "<tr><th>Photo</th><th>Name</th><th>Phone</th><th>Category</th><th>Dept</th><th>Meeting</th><th>In Time</th><th>Out Time</th><th>Status</th><th>Action</th></tr>"
-        + rows +
-        "</table></div></div>"
-        "<script>"
-        "var _lc=0;"
-        "async function act(id,action){"
-        "if(!confirm(action+' this visitor?'))return;"
-        "var r=await fetch('/action/'+id+'/'+action,{headers:{'Accept':'application/json'}});"
-        "var d=await r.json();"
-        "if(action==='approve'){window.open('/pass/'+id);}"
-        "location.reload();}"
-        "async function checkout(id){"
-        "if(!confirm('Checkout this visitor?'))return;"
-        "await fetch('/api/checkout/'+id,{method:'POST'});"
-        "location.reload();}"
+        + rows + "</table></div>"
+        "<div class='card'><h3>&#9749; Recent Pantry Orders</h3>"
+        "<table class='order-table'>"
+        "<tr><th>Guest</th><th>Host</th><th>Drink</th><th>Snacks</th><th>Time</th><th>Status</th></tr>"
+        + order_rows + "</table></div>"
+        "</div>"
+        "<script>" + BEEP_JS +
+        "var _lc=0,_oc=0,_ol=null;"
+        "function exportExcel(){var from=document.getElementById('f-from').value;var to=document.getElementById('f-to').value;var dept=document.getElementById('f-dept').value;var status=document.getElementById('f-status').value;window.open('/admin/export?from='+from+'&to='+to+'&dept='+dept+'&status='+status);}"
+        "async function act(id,action){if(!confirm(action+' this visitor?'))return;var r=await fetch('/action/'+id+'/'+action,{headers:{'Accept':'application/json'}});var d=await r.json();if(action==='approve'){window.open('/pass/'+id);}location.reload();}"
+        "async function checkout(id){if(!confirm('Checkout this visitor?'))return;await fetch('/api/checkout/'+id,{method:'POST'});location.reload();}"
         "async function _chkNew(){"
-        "try{var r=await fetch('/api/pending-count');var d=await r.json();"
-        "if(_lc>0&&d.count>_lc){_beep();"
-        "if(Notification.permission==='granted'){new Notification('Maxwell',{body:'New visitor request!',icon:'/favicon.ico'});}}"
-        "_lc=d.count;document.title=d.count>0?'('+d.count+') New! - Maxwell Admin':'Maxwell Admin';"
-        "}catch(e){}}"
-        "function _beep(){"
-        "try{var c=new(window.AudioContext||window.webkitAudioContext)();"
-        "var notes=[880,660,880,1100];"
-        "notes.forEach(function(freq,i){"
-        "var o=c.createOscillator(),g=c.createGain();"
-        "o.connect(g);g.connect(c.destination);"
-        "o.frequency.value=freq;o.type='sine';"
-        "var t=c.currentTime+i*0.2;"
-        "g.gain.setValueAtTime(0,t);"
-        "g.gain.linearRampToValueAtTime(1.5,t+0.05);"
-        "g.gain.exponentialRampToValueAtTime(0.001,t+0.35);"
-        "o.start(t);o.stop(t+0.35);});"
+        "try{"
+        "var r1=await fetch('/api/pending-count');var d1=await r1.json();"
+        "if(_lc>0&&d1.count>_lc){_beep(4);if(Notification.permission==='granted'){new Notification('Maxwell',{body:'New visitor request!'}); }"
+        "document.getElementById('notif-banner').textContent='&#128276; New visitor request!';document.getElementById('notif-banner').style.display='block';"
+        "setTimeout(function(){document.getElementById('notif-banner').style.display='none';},10000);}"
+        "_lc=d1.count;document.title=d1.count>0?'('+d1.count+') New! - Maxwell Admin':'Maxwell Admin';"
+        "var r2=await fetch('/api/order-count');var d2=await r2.json();"
+        "if(_oc>0&&d2.count>_oc&&d2.latest){var l=d2.latest;"
+        "_beep(4);"
+        "var msg='New order: '+l.drink+' x'+l.quantity+' for '+l.person_to_meet+' (Guest: '+l.visitor_name+')';"
+        "document.getElementById('notif-banner').textContent=msg;document.getElementById('notif-banner').style.display='block';"
+        "if(Notification.permission==='granted'){new Notification('Pantry Order',{body:msg});}"
+        "setTimeout(function(){document.getElementById('notif-banner').style.display='none';},12000);}"
+        "_oc=d2.count;"
         "}catch(e){}}"
         "if(Notification.permission==='default'){Notification.requestPermission();}"
         "setInterval(_chkNew,8000);_chkNew();"
-        "</script></body></html>"
-    )
+        "</script></body></html>")
 
 @app.route("/admin-login", methods=["POST"])
 def admin_login():
@@ -874,6 +800,71 @@ def admin_logout():
     session.clear()
     return redirect("/admin")
 
+# ── EXCEL EXPORT ──────────────────────────────────────────
+@app.route("/admin/export")
+def export_excel():
+    if not session.get("admin_ok"): return redirect("/admin")
+    if not HAS_EXCEL: return "openpyxl not installed", 400
+    date_from = request.args.get("from","")
+    date_to   = request.args.get("to","")
+    dept      = request.args.get("dept","")
+    status    = request.args.get("status","")
+    conn = get_db()
+    query = "SELECT * FROM visitors WHERE 1=1"
+    params = []
+    if date_from: query += " AND created_at >= ?"; params.append(date_from)
+    if date_to:   query += " AND created_at <= ?"; params.append(date_to + " 23:59")
+    if dept:      query += " AND department=?";    params.append(dept)
+    if status:    query += " AND status=?";        params.append(status)
+    query += " ORDER BY id DESC"
+    visitors = [dict(r) for r in conn.execute(query, params).fetchall()]
+    conn.close()
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Visitor Report"
+    header_fill = PatternFill("solid", fgColor="1565C0")
+    header_font = Font(color="FFFFFF", bold=True, size=12)
+    headers = ["#","Photo","Name","Phone","Person to Meet","Department","Category","Purpose","Status","Pass No","In Time","Out Time"]
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.fill = header_fill; cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 25
+    col_widths = [5,15,20,15,20,15,15,25,12,20,18,18]
+    for i, w in enumerate(col_widths, 1):
+        ws.column_dimensions[chr(64+i)].width = w
+    for row, v in enumerate(visitors, 2):
+        ws.cell(row=row, column=1, value=row-1)
+        if v.get("photo") and v["photo"].startswith("data:image"):
+            try:
+                img_data = v["photo"].split(",")[1]
+                img_bytes = base64.b64decode(img_data)
+                img_buf = io.BytesIO(img_bytes)
+                from openpyxl.drawing.image import Image as XLImage
+                xl_img = XLImage(img_buf)
+                xl_img.width = 60; xl_img.height = 60
+                ws.row_dimensions[row].height = 50
+                ws.add_image(xl_img, "B" + str(row))
+            except: ws.cell(row=row, column=2, value="Photo")
+        ws.cell(row=row, column=3, value=v.get("name",""))
+        ws.cell(row=row, column=4, value=v.get("phone",""))
+        ws.cell(row=row, column=5, value=v.get("person_to_meet",""))
+        ws.cell(row=row, column=6, value=v.get("department",""))
+        ws.cell(row=row, column=7, value=v.get("category",""))
+        ws.cell(row=row, column=8, value=v.get("purpose",""))
+        ws.cell(row=row, column=9, value=v.get("status",""))
+        ws.cell(row=row, column=10, value=v.get("pass_number",""))
+        ws.cell(row=row, column=11, value=v.get("created_at",""))
+        ws.cell(row=row, column=12, value=v.get("checkout_at","") or "-")
+        if v.get("status") == "approved": fill = PatternFill("solid", fgColor="E8F5E9")
+        elif v.get("status") == "rejected": fill = PatternFill("solid", fgColor="FFEBEE")
+        else: fill = PatternFill("solid", fgColor="FFF8E1")
+        for col in range(3, 13): ws.cell(row=row, column=col).fill = fill
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    filename = "Maxwell_Visitors_" + datetime.now().strftime("%d%m%Y") + ".xlsx"
+    return send_file(buf, as_attachment=True, download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
 # ── PANTRY ────────────────────────────────────────────────
 @app.route("/pantry-login", methods=["GET","POST"])
 def pantry_login():
@@ -884,11 +875,9 @@ def pantry_login():
         if email == PANTRY_EMAIL and pwd == PANTRY_PASSWORD:
             session["pantry_ok"] = True
             return redirect("/pantry")
-        err = "Wrong credentials! Email: maxwellvisitor05@gmail.com / Password: MaxwellPantry2024"
-    return (
-        "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Pantry Login</title>"
-        "<style>body{font-family:Arial;background:#f0f4f8}"
-        ".header{background:#1565C0;color:white;padding:13px 25px}"
+        err = "Wrong credentials!"
+    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Pantry Login</title>"
+        "<style>body{font-family:Arial;background:#f0f4f8}.header{background:#1565C0;color:white;padding:13px 25px}"
         ".box{max-width:400px;margin:70px auto;background:white;padding:38px;border-radius:13px;box-shadow:0 5px 18px rgba(0,0,0,0.1)}"
         ".box h2{color:#1565C0;text-align:center;margin-bottom:22px}"
         "label{display:block;font-size:13px;font-weight:600;color:#444;margin-bottom:5px;margin-top:14px}"
@@ -904,117 +893,118 @@ def pantry_login():
         "<label>Email</label><input type='email' name='email' value='maxwellvisitor05@gmail.com'>"
         "<label>Password</label><input type='password' name='password' placeholder='MaxwellPantry2024'>"
         "<button type='submit'>LOGIN</button></form>"
-        + ("<p class='err'>" + err + "</p>" if err else "") +
-        "<div class='hint'>Email: maxwellvisitor05@gmail.com<br>Password: MaxwellPantry2024</div>"
-        "</div></body></html>"
-    )
+        + ("<p class='err'>" + err + "</p>" if err else "")
+        + "<div class='hint'>Email: maxwellvisitor05@gmail.com | Password: MaxwellPantry2024</div>"
+        "</div></body></html>")
 
 @app.route("/pantry")
 def pantry():
     if not session.get("pantry_ok") and not session.get("admin_ok"):
         return redirect("/pantry-login")
     conn = get_db()
-    orders = [dict(r) for r in conn.execute(
-        "SELECT * FROM pantry_orders ORDER BY id DESC LIMIT 60"
-    ).fetchall()]
+    orders = [dict(r) for r in conn.execute("SELECT * FROM pantry_orders ORDER BY id DESC LIMIT 60").fetchall()]
     conn.close()
 
     rows = ""
     for o in orders:
-        status_badge = "pending" if o["status"]=="pending" else "delivered"
-        timer_html = ""
-        if o["status"] == "pending" and o.get("timer_start"):
-            timer_html = '<div id="tmr-'+str(o["id"])+'" style="color:#F57F17;font-size:11px;font-weight:600"></div>'
+        sb = "pending" if o["status"]=="pending" else "delivered"
         ab = ""
+        timer_html = ""
         if o["status"] == "pending":
-            ab = '<button class="btn ba" onclick="deliverOrder('+str(o["id"])+',' + "'drink'" + ')">&#10003; Delivered</button>'
-        
-        drink_info = str(o["drink"]) if o.get("drink") else "-"
-        snacks_info = str(o["snacks"]) if o.get("snacks") else "-"
-        
-        rows += (
-            "<tr id='row-"+str(o["id"])+"'>"
+            ab = '<button class="btn ba" onclick="deliverOrder('+str(o["id"])+')">&#10003; Delivered</button>'
+            # Timer countdown from created_at
+            timer_html = '<div id="tmr-'+str(o["id"])+'" style="font-size:12px;font-weight:600;margin-top:4px"></div>'
+        drink_info = str(o.get("drink","")) + " x" + str(o.get("quantity",""))
+        snacks_info = str(o.get("snacks","")) if o.get("snacks") else "-"
+        rows += ("<tr id='row-"+str(o["id"])+"'>"
             "<td><strong>" + str(o["visitor_name"]) + "</strong></td>"
             "<td>" + str(o["person_to_meet"]) + "</td>"
-            "<td>" + drink_info + " x" + str(o["quantity"]) + "</td>"
+            "<td>" + drink_info + "</td>"
             "<td>" + snacks_info + "</td>"
-            "<td>" + str(o["note"] or "-") + "</td>"
+            "<td>" + str(o.get("note","") or "-") + "</td>"
             "<td style='font-size:11px'>" + str(o["created_at"]) + "</td>"
-            "<td><span class='badge " + status_badge + "'>" + o["status"].upper() + "</span>" + timer_html + "</td>"
-            "<td>" + ab + "</td></tr>"
-        )
-    if not rows:
-        rows = '<tr><td colspan="8" style="text-align:center;padding:25px;color:#999">No orders</td></tr>'
+            "<td><span class='badge " + sb + "'>" + o["status"].upper() + "</span>" + timer_html + "</td>"
+            "<td>" + ab + "</td></tr>")
+    if not rows: rows = '<tr><td colspan="8" style="text-align:center;padding:25px;color:#999">No orders</td></tr>'
 
-    return (
-        "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Pantry Dashboard</title>"
+    # Pass order times as JSON for timer
+    import json
+    order_times = {str(o["id"]): o["created_at"] for o in orders if o["status"]=="pending"}
+
+    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Pantry Dashboard</title>"
         "<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial;background:#f0f4f8}"
         ".header{background:#1565C0;color:white;padding:13px 25px;display:flex;justify-content:space-between;align-items:center}"
         ".header a{color:white;text-decoration:none;background:rgba(255,255,255,0.2);padding:7px 13px;border-radius:5px;font-size:13px;margin-left:7px}"
         ".container{max-width:1000px;margin:20px auto;padding:0 15px}"
         ".card{background:white;border-radius:9px;padding:18px;box-shadow:0 2px 8px rgba(0,0,0,0.07);overflow-x:auto;margin-bottom:15px}"
         ".card h3{color:#1565C0;margin-bottom:14px}"
-        ".pending-banner{background:#FFF8E1;border:2px solid #F57F17;border-radius:9px;padding:15px;margin-bottom:15px;text-align:center;font-weight:700;color:#E65100;font-size:16px;display:none}"
+        ".notif-banner{background:#FFF8E1;border:2px solid #F57F17;border-radius:9px;padding:15px;margin-bottom:15px;text-align:center;font-weight:700;color:#E65100;font-size:16px;display:none}"
         "table{width:100%;border-collapse:collapse;min-width:700px}"
         "th{background:#1565C0;color:white;padding:10px;font-size:12px;text-align:left}"
         "td{padding:10px;border-bottom:1px solid #eee;font-size:13px;vertical-align:middle}"
-        "tr.pending-row{background:#FFF8E1}"
         ".badge{display:inline-block;padding:3px 9px;border-radius:11px;font-size:11px;font-weight:700}"
-        ".badge.pending{background:#FFF8E1;color:#F57F17}"
-        ".badge.delivered{background:#E8F5E9;color:#2E7D32}"
+        ".badge.pending{background:#FFF8E1;color:#F57F17}.badge.delivered{background:#E8F5E9;color:#2E7D32}"
         ".btn{padding:6px 12px;border:none;border-radius:5px;cursor:pointer;font-size:12px;font-weight:600;margin:2px}"
         ".ba{background:#2E7D32;color:white}"
+        ".timer-red{color:#C62828!important;font-weight:900!important;animation:blink 1s infinite}"
+        "@keyframes blink{0%,100%{opacity:1}50%{opacity:0.4}}"
         "</style></head><body>"
         "<div class='header'><h1>&#9749; Pantry Dashboard</h1>"
         "<div><a href='/admin'>Admin</a><a href='/pantry-logout'>Logout</a></div></div>"
         "<div class='container'>"
-        "<div class='pending-banner' id='pending-banner'>&#128276; NEW ORDER! Please check below!</div>"
-        "<div class='card'>"
-        "<h3>Beverage & Snack Orders</h3>"
+        "<div class='notif-banner' id='notif-banner'>&#128276; NEW ORDER! Please check below!</div>"
+        "<div class='card'><h3>Beverage & Snack Orders</h3>"
         "<table><tr><th>Guest</th><th>Host</th><th>Drink & Qty</th><th>Snacks</th><th>Note</th><th>Time</th><th>Status</th><th>Action</th></tr>"
-        + rows +
-        "</table></div></div>"
-        "<script>"
-        "var _pc=0,_timers={};"
-        "async function deliverOrder(id,type){"
-        "var r=await fetch('/api/pantry-deliver/'+id,{method:'POST'});"
-        "var d=await r.json();"
-        "if(d.success){location.reload();}}"
+        + rows + "</table></div></div>"
+        "<script>" + BEEP_JS +
+        "var _pc=0;"
+        "var _orderTimes=" + json.dumps(order_times) + ";"
+        "async function deliverOrder(id){var r=await fetch('/api/pantry-deliver/'+id,{method:'POST'});var d=await r.json();if(d.success){location.reload();}}"
+        # Timer logic
+        "function updateTimers(){"
+        "var now=new Date();"
+        "Object.keys(_orderTimes).forEach(function(id){"
+        "var el=document.getElementById('tmr-'+id);if(!el)return;"
+        "var parts=_orderTimes[id].split(' ');"
+        "if(parts.length<2)return;"
+        "var dp=parts[0].split('-');var tp=parts[1].split(':');"
+        "var orderTime=new Date(parseInt(dp[2]),parseInt(dp[1])-1,parseInt(dp[0]),parseInt(tp[0]),parseInt(tp[1]));"
+        "var diffMs=now-orderTime;var diffMin=Math.floor(diffMs/60000);"
+        "var remaining=10-diffMin;"
+        "if(remaining<=0){"
+        "el.innerHTML='&#9888; OVERDUE! '+Math.abs(remaining)+'m ago';"
+        "el.className='timer-red';"
+        "_beep(6);"
+        "}else if(remaining<=3){"
+        "el.innerHTML='&#9888; '+remaining+' min left';"
+        "el.style.color='#C62828';el.style.fontWeight='900';"
+        "}else{"
+        "el.innerHTML='&#9200; '+remaining+' min left';"
+        "el.style.color=remaining<=7?'#F57F17':'#2E7D32';"
+        "}"
+        "});"
+        "}"
         "async function checkOrders(){try{"
         "var r=await fetch('/api/pantry-pending');"
         "var d=await r.json();"
-        "if(_pc>0&&d.count>_pc){"
-        "_beep();"
-        "document.getElementById('pending-banner').style.display='block';"
-        "if(Notification.permission==='granted'){new Notification('Pantry - New Order!',{body:'New beverage order received!'});}"
-        "setTimeout(function(){document.getElementById('pending-banner').style.display='none';},10000);}"
+        "if(_pc>0&&d.count>_pc){_beep(5);"
+        "document.getElementById('notif-banner').style.display='block';"
+        "if(Notification.permission==='granted'){new Notification('Pantry - New Order!',{body:'New beverage order!'});}"
+        "setTimeout(function(){document.getElementById('notif-banner').style.display='none';},10000);}"
         "_pc=d.count;"
         "document.title=d.count>0?'('+d.count+') NEW ORDER! - Pantry':'Pantry Dashboard';"
         "}catch(e){}}"
-        "function _beep(){"
-        "try{var c=new(window.AudioContext||window.webkitAudioContext)();"
-        "for(var i=0;i<5;i++){(function(n){"
-        "var o=c.createOscillator(),g=c.createGain();"
-        "o.connect(g);g.connect(c.destination);"
-        "o.frequency.value=n%2===0?880:660;o.type='sine';"
-        "var t=c.currentTime+n*0.3;"
-        "g.gain.setValueAtTime(0,t);"
-        "g.gain.linearRampToValueAtTime(2.0,t+0.05);"
-        "g.gain.exponentialRampToValueAtTime(0.001,t+0.4);"
-        "o.start(t);o.stop(t+0.4);})(i);}"
-        "}catch(e){}}"
         "if(Notification.permission==='default'){Notification.requestPermission();}"
         "setInterval(checkOrders,6000);checkOrders();"
-        "</script></body></html>"
-    )
+        "setInterval(updateTimers,15000);updateTimers();"
+        "</script></body></html>")
 
 @app.route("/api/pantry-deliver/<int:oid>", methods=["POST"])
 def pantry_deliver(oid):
-    now = datetime.now().strftime("%d-%m-%Y %H:%M")
+    now = get_ist()
     conn = get_db()
     conn.execute("UPDATE pantry_orders SET status='delivered',delivered_at=? WHERE id=?",(now,oid))
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
     return jsonify({"success": True})
 
 @app.route("/api/pantry-pending")
@@ -1043,38 +1033,41 @@ def employee_login():
                 session["emp_name"] = emp_name
                 return redirect("/employee-dashboard")
             else:
-                err = "Wrong password! Use your full name as password."
+                err = "Wrong password!"
         else:
             err = "Email not found."
-    return (
-        "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Employee Login</title>"
-        "<style>body{font-family:Arial;background:#f0f4f8}"
-        ".header{background:#1565C0;color:white;padding:13px 25px}"
+    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Employee Login</title>"
+        "<style>body{font-family:Arial;background:#f0f4f8}.header{background:#1565C0;color:white;padding:13px 25px}"
         ".box{max-width:400px;margin:60px auto;background:white;padding:38px;border-radius:13px;box-shadow:0 5px 18px rgba(0,0,0,0.1)}"
         ".box h2{color:#1565C0;text-align:center;margin-bottom:22px}"
         "label{display:block;font-size:13px;font-weight:600;color:#444;margin-bottom:5px;margin-top:14px}"
+        ".pw-wrap{position:relative}"
+        ".pw-wrap input{padding-right:42px}"
+        ".eye-btn{position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:18px;color:#999;padding:0}"
         "input{width:100%;padding:11px;border:2px solid #e0e0e0;border-radius:7px;font-size:14px}"
         "input:focus{outline:none;border-color:#1565C0}"
-        "button{width:100%;margin-top:18px;padding:12px;background:#1565C0;color:white;border:none;border-radius:7px;font-size:15px;font-weight:700;cursor:pointer}"
+        "button.submit-btn{width:100%;margin-top:18px;padding:12px;background:#1565C0;color:white;border:none;border-radius:7px;font-size:15px;font-weight:700;cursor:pointer}"
         ".err{color:red;font-size:13px;margin-top:8px;text-align:center}"
         "a{display:block;text-align:center;margin-top:13px;color:#1565C0;font-size:13px}"
-        ".hint{background:#e3f2fd;padding:10px;border-radius:6px;font-size:12px;color:#1565C0;margin-top:10px}"
         "</style></head><body>"
         "<div class='header'><h1>Maxwell Engineering Solutions</h1></div>"
         "<div class='box'><h2>Employee Login</h2>"
         "<form method='POST'>"
         "<label>Company Email</label><input type='email' name='email' placeholder='yourname@maxwells.in' required>"
-        "<label>Password</label><input type='password' name='password' placeholder='Your full name' required>"
-        "<button type='submit'>LOGIN</button></form>"
-        + ("<p class='err'>" + err + "</p>" if err else "") +
-        "<div class='hint'>Password = Your full name (e.g. Vrunda Thakkar)</div>"
-        "<a href='/'>Back to Visitor Form</a></div></body></html>"
-    )
+        "<label>Password</label>"
+        "<div class='pw-wrap'>"
+        "<input type='password' name='password' id='pw-field' placeholder='Enter password' required>"
+        "<button type='button' class='eye-btn' onclick='togglePw()' id='eye-btn'>&#128065;</button>"
+        "</div>"
+        "<button type='submit' class='submit-btn'>LOGIN</button></form>"
+        + ("<p class='err'>" + err + "</p>" if err else "")
+        + "<a href='/'>Back to Visitor Form</a></div>"
+        "<script>function togglePw(){var f=document.getElementById('pw-field');var b=document.getElementById('eye-btn');if(f.type==='password'){f.type='text';b.style.color='#1565C0';}else{f.type='password';b.style.color='#999';}}</script>"
+        "</body></html>")
 
 @app.route("/employee-dashboard")
 def employee_dashboard():
-    if not session.get("emp_name"):
-        return redirect("/employee-login")
+    if not session.get("emp_name"): return redirect("/employee-login")
     name = session["emp_name"]
     conn = get_db()
     visitors = [dict(r) for r in conn.execute(
@@ -1085,9 +1078,7 @@ def employee_dashboard():
     ).fetchall()]
     conn.close()
 
-    drinks_opts = ""
-    for d in DRINKS_MENU:
-        drinks_opts += '<option value="' + d + '">' + d + '</option>'
+    drinks_opts = "".join('<option value="' + d + '">' + d + '</option>' for d in DRINKS_MENU)
 
     active_rows = ""
     for v in visitors:
@@ -1097,59 +1088,49 @@ def employee_dashboard():
             "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:10px'>"
             "<div><strong style='font-size:16px'>" + str(v["name"]) + "</strong>"
             "<span style='color:#666;font-size:12px;margin-left:10px'>" + str(v["created_at"]) + "</span></div>"
-            "<button style='background:#C62828;color:white;border:none;padding:6px 12px;border-radius:5px;cursor:pointer;font-weight:600' onclick='checkout(" + vid + ")'>Checkout</button></div>"
+            "<button style='background:#C62828;color:white;border:none;padding:6px 12px;border-radius:5px;cursor:pointer;font-weight:600' onclick='checkout("+vid+")'>Checkout</button></div>"
             "<div style='font-size:13px;color:#444;margin-bottom:12px'>Purpose: " + str(v["purpose"]) + "</div>"
-
-            "<!-- DRINK ORDER -->"
             "<div style='background:white;border-radius:8px;padding:12px;margin-bottom:10px'>"
             "<div style='font-size:13px;font-weight:700;color:#1565C0;margin-bottom:8px'>&#9749; Order Drink</div>"
             "<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
-            "<select id='drk-" + vid + "' style='padding:8px 12px;border:1.5px solid #ddd;border-radius:8px;font-size:13px;flex:1;min-width:140px'>"
+            "<select id='drk-"+vid+"' style='padding:8px 12px;border:1.5px solid #ddd;border-radius:8px;font-size:13px;flex:1;min-width:140px'>"
             "<option value=''>-- Select Drink --</option>" + drinks_opts + "</select>"
             "<div style='display:flex;align-items:center;gap:6px'>"
-            "<button onclick='changeQty(\"" + vid + "\",-1)' style='width:32px;height:32px;border-radius:50%;border:1.5px solid #1565C0;background:white;color:#1565C0;font-size:18px;cursor:pointer;font-weight:700'>−</button>"
-            "<span id='qty-" + vid + "' style='font-size:16px;font-weight:700;min-width:30px;text-align:center'>1</span>"
-            "<button onclick='changeQty(\"" + vid + "\",1)' style='width:32px;height:32px;border-radius:50%;border:1.5px solid #1565C0;background:white;color:#1565C0;font-size:18px;cursor:pointer;font-weight:700'>+</button>"
+            "<button onclick='changeQty(\""+vid+"\",-1)' style='width:32px;height:32px;border-radius:50%;border:1.5px solid #1565C0;background:white;color:#1565C0;font-size:18px;cursor:pointer;font-weight:700'>&#8722;</button>"
+            "<span id='qty-"+vid+"' style='font-size:16px;font-weight:700;min-width:30px;text-align:center'>1</span>"
+            "<button onclick='changeQty(\""+vid+"\",1)' style='width:32px;height:32px;border-radius:50%;border:1.5px solid #1565C0;background:white;color:#1565C0;font-size:18px;cursor:pointer;font-weight:700'>+</button>"
             "</div></div>"
-            "<input type='text' id='note-" + vid + "' placeholder='Special note (less sugar, add ginger...)' style='width:100%;padding:8px;border:1.5px solid #ddd;border-radius:6px;margin-top:8px;font-size:13px'>"
+            "<input type='text' id='note-"+vid+"' placeholder='Special note (less sugar, add ginger...)' style='width:100%;padding:8px;border:1.5px solid #ddd;border-radius:6px;margin-top:8px;font-size:13px'>"
             "</div>"
-
-            "<!-- SNACKS ORDER -->"
             "<div style='background:white;border-radius:8px;padding:12px;margin-bottom:10px'>"
             "<div style='font-size:13px;font-weight:700;color:#1565C0;margin-bottom:8px'>&#127860; Order Snacks (Optional)</div>"
-            "<input type='text' id='snk-" + vid + "' placeholder='e.g. Biscuits, Namkeen, Fruits...' style='width:100%;padding:8px;border:1.5px solid #ddd;border-radius:6px;font-size:13px'>"
+            "<input type='text' id='snk-"+vid+"' placeholder='e.g. Biscuits, Namkeen, Fruits...' style='width:100%;padding:8px;border:1.5px solid #ddd;border-radius:6px;font-size:13px'>"
             "</div>"
-
-            "<button onclick='confirmOrder(\"" + vid + "\",\"" + str(v["name"]) + "\",\"" + name + "\")' "
+            "<button onclick='confirmOrder(\""+vid+"\",\""+str(v["name"])+"\",\""+name+"\")' "
             "style='background:#1565C0;color:white;border:none;padding:10px 20px;border-radius:8px;cursor:pointer;font-weight:700;font-size:14px;width:100%'>"
             "&#9749; Confirm Order</button>"
             "</div>"
         )
     if not active_rows:
-        active_rows = "<div style='text-align:center;padding:30px;color:#999'>No active visitors at the moment</div>"
+        active_rows = "<div style='text-align:center;padding:30px;color:#999'>No active visitors</div>"
 
     hist_rows = ""
     for v in all_visitors:
         bc = "pending" if v["status"]=="pending" else ("approved" if v["status"]=="approved" else "rejected")
         ab = ""
         if v["status"] == "pending":
-            ab += '<button class="btn ba" onclick="act('+str(v["id"])+',' + "'approve'" + ')">&#10003; Approve</button>'
-            ab += '<button class="btn br" onclick="act('+str(v["id"])+',' + "'reject'" + ')">&#10005; Reject</button>'
+            ab += '<button class="btn ba" onclick="act('+str(v["id"])+",'approve'"+ ')">&#10003; Approve</button>'
+            ab += '<button class="btn br" onclick="act('+str(v["id"])+",'reject'"+ ')">&#10005; Reject</button>'
         co = v.get("checkout_at") or "-"
-        hist_rows += (
-            "<tr><td><strong>" + str(v["name"]) + "</strong></td>"
-            "<td>" + str(v["phone"]) + "</td>"
-            "<td>" + str(v["purpose"]) + "</td>"
-            "<td style='font-size:11px'>" + str(v["created_at"]) + "</td>"
+        hist_rows += ("<tr><td><strong>" + str(v["name"]) + "</strong></td><td>" + str(v["phone"]) + "</td>"
+            "<td>" + str(v["purpose"]) + "</td><td style='font-size:11px'>" + str(v["created_at"]) + "</td>"
             "<td style='font-size:11px'>" + co + "</td>"
             "<td><span class='badge " + bc + "'>" + v["status"].upper() + "</span></td>"
-            "<td>" + ab + "</td></tr>"
-        )
+            "<td>" + ab + "</td></tr>")
     if not hist_rows:
         hist_rows = '<tr><td colspan="7" style="text-align:center;padding:20px;color:#999">No visitors</td></tr>'
 
-    return (
-        "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>" + name + " Dashboard</title>"
+    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>" + name + " Dashboard</title>"
         "<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial;background:#f0f4f8}"
         ".header{background:#1565C0;color:white;padding:13px 25px;display:flex;justify-content:space-between;align-items:center}"
         ".header a{color:white;text-decoration:none;background:rgba(255,255,255,0.2);padding:7px 13px;border-radius:5px;font-size:13px;margin-left:7px}"
@@ -1160,25 +1141,23 @@ def employee_dashboard():
         "th{background:#1565C0;color:white;padding:10px;font-size:12px;text-align:left}"
         "td{padding:10px;border-bottom:1px solid #eee;font-size:13px;vertical-align:middle}"
         ".badge{display:inline-block;padding:3px 9px;border-radius:11px;font-size:11px;font-weight:700}"
-        ".badge.pending{background:#FFF8E1;color:#F57F17}"
-        ".badge.approved{background:#E8F5E9;color:#2E7D32}"
+        ".badge.pending{background:#FFF8E1;color:#F57F17}.badge.approved{background:#E8F5E9;color:#2E7D32}"
         ".badge.rejected{background:#FFEBEE;color:#C62828}"
         ".btn{padding:5px 11px;border:none;border-radius:5px;cursor:pointer;font-size:12px;font-weight:600;margin:2px}"
         ".ba{background:#2E7D32;color:white}.br{background:#C62828;color:white}"
+        ".notif-banner{background:#E3F2FD;border:2px solid #1565C0;border-radius:9px;padding:12px 18px;margin-bottom:15px;display:none;font-weight:700;color:#1565C0;font-size:14px}"
         "</style></head><body>"
         "<div class='header'><h1>" + name + " — Dashboard</h1>"
         "<div><a href='/'>Visitor Form</a><a href='/employee-logout'>Logout</a></div></div>"
         "<div class='container'>"
+        "<div class='notif-banner' id='notif-banner'></div>"
         "<div class='card'><h3>&#128100; Active Visitors</h3>" + active_rows + "</div>"
         "<div class='card'><h3>&#128203; Visitor History</h3>"
         "<table><tr><th>Name</th><th>Phone</th><th>Purpose</th><th>In Time</th><th>Out Time</th><th>Status</th><th>Action</th></tr>"
         + hist_rows + "</table></div></div>"
-        "<script>"
-        "var _qty={};"
-        "function changeQty(vid,delta){"
-        "if(!_qty[vid])_qty[vid]=1;"
-        "_qty[vid]=Math.max(1,_qty[vid]+delta);"
-        "document.getElementById('qty-'+vid).textContent=_qty[vid];}"
+        "<script>" + BEEP_JS +
+        "var _qty={},_lc=0,_oc=0;"
+        "function changeQty(vid,delta){if(!_qty[vid])_qty[vid]=1;_qty[vid]=Math.max(1,_qty[vid]+delta);document.getElementById('qty-'+vid).textContent=_qty[vid];}"
         "async function confirmOrder(vid,vname,person){"
         "var drink=document.getElementById('drk-'+vid).value;"
         "var qty=_qty[vid]||1;"
@@ -1189,38 +1168,27 @@ def employee_dashboard():
         "body:JSON.stringify({visitor_id:vid,visitor_name:vname,person_to_meet:person,drink:drink,quantity:qty,note:note,snacks:snacks})});"
         "var d=await r.json();"
         "if(d.success){alert('Order sent to Pantry!');location.reload();}}"
-        "async function act(id,action){"
-        "if(!confirm(action+' this visitor?'))return;"
-        "var r=await fetch('/action/'+id+'/'+action,{headers:{'Accept':'application/json'}});"
-        "var d=await r.json();"
-        "if(action==='approve'){window.open('/pass/'+id);}"
-        "location.reload();}"
-        "async function checkout(id){"
-        "if(!confirm('Checkout visitor?'))return;"
-        "await fetch('/api/checkout/'+id,{method:'POST'});"
-        "location.reload();}"
-        "var _pc=0;"
+        "async function act(id,action){if(!confirm(action+' this visitor?'))return;var r=await fetch('/action/'+id+'/'+action,{headers:{'Accept':'application/json'}});var d=await r.json();if(action==='approve'){window.open('/pass/'+id);}location.reload();}"
+        "async function checkout(id){if(!confirm('Checkout visitor?'))return;await fetch('/api/checkout/'+id,{method:'POST'});location.reload();}"
         "async function checkNew(){try{"
-        "var r=await fetch('/api/pending-count');var d=await r.json();"
-        "if(_pc>0&&d.count>_pc){_beep();}"
-        "_pc=d.count;document.title=d.count>0?'('+d.count+') New - '+'" + name + "':'"+name+" Dashboard';"
+        "var r1=await fetch('/api/pending-count');var d1=await r1.json();"
+        "if(_lc>0&&d1.count>_lc){_beep(4);}"
+        "_lc=d1.count;document.title=d1.count>0?'('+d1.count+') New - "+name+"':'"+name+" Dashboard';"
+        "var r2=await fetch('/api/order-count');var d2=await r2.json();"
+        "if(_oc>0&&d2.count>_oc&&d2.latest){"
+        "var l=d2.latest;"
+        "if(l.person_to_meet==='"+name+"'){"
+        "_beep(4);"
+        "var msg='&#9749; New order for your guest '+l.visitor_name+': '+l.drink+' x'+l.quantity;"
+        "if(l.snacks)msg+=' + Snacks: '+l.snacks;"
+        "document.getElementById('notif-banner').innerHTML=msg;"
+        "document.getElementById('notif-banner').style.display='block';"
+        "setTimeout(function(){document.getElementById('notif-banner').style.display='none';},15000);"
+        "}}"
+        "_oc=d2.count;"
         "}catch(e){}}"
-        "function _beep(){"
-        "try{var c=new(window.AudioContext||window.webkitAudioContext)();"
-        "var notes=[880,660,880,1100];"
-        "notes.forEach(function(freq,i){"
-        "var o=c.createOscillator(),g=c.createGain();"
-        "o.connect(g);g.connect(c.destination);"
-        "o.frequency.value=freq;o.type='sine';"
-        "var t=c.currentTime+i*0.2;"
-        "g.gain.setValueAtTime(0,t);"
-        "g.gain.linearRampToValueAtTime(1.5,t+0.05);"
-        "g.gain.exponentialRampToValueAtTime(0.001,t+0.35);"
-        "o.start(t);o.stop(t+0.35);});"
-        "}catch(e){}}"
-        "setInterval(checkNew,8000);"
-        "</script></body></html>"
-    )
+        "setInterval(checkNew,8000);checkNew();"
+        "</script></body></html>")
 
 @app.route("/employee-logout")
 def employee_logout():
@@ -1229,14 +1197,7 @@ def employee_logout():
 
 @app.route("/manifest.json")
 def manifest():
-    return jsonify({
-        "name": "Maxwell Visitor Management",
-        "short_name": "Maxwell VM",
-        "start_url": "/",
-        "display": "standalone",
-        "background_color": "#f0f4f8",
-        "theme_color": "#1565C0"
-    })
+    return jsonify({"name":"Maxwell Visitor Management","short_name":"Maxwell VM","start_url":"/","display":"standalone","background_color":"#f0f4f8","theme_color":"#1565C0"})
 
 init_db()
 
