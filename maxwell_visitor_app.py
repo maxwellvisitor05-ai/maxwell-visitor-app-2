@@ -300,7 +300,7 @@ def build_visitor_form(prefill):
 body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f4f8}
 .header{background:#1565C0;padding:10px 20px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 8px rgba(0,0,0,0.2)}
 .hdr-logo-wrap{flex:1;display:flex;justify-content:center}
-.hdr-logo{height:60px;object-fit:contain}
+.hdr-logo{height:60px;object-fit:contain;mix-blend-mode:multiply}
 .nav a{color:white;text-decoration:none;font-size:12px;padding:6px 12px;border:1.5px solid rgba(255,255,255,0.6);border-radius:6px;margin-left:5px;font-weight:600}
 .nav a:hover{background:rgba(255,255,255,0.2)}
 .container{max-width:640px;margin:20px auto;padding:0 12px}
