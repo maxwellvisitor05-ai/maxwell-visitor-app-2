@@ -94,9 +94,22 @@ DRINKS_MENU = ["Water", "Tea", "Coffee", "Green Tea", "Black Coffee", "Juice", "
 DEFAULT_PHOTO = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHdpZHRoPSc4MCcgaGVpZ2h0PSc4MCc+PGNpcmNsZSBjeD0nNDAnIGN5PSc0MCcgcj0nNDAnIGZpbGw9JyNlMGUwZTAnLz48dGV4dCB4PSc0MCcgeT0nNTAnIGZvbnQtZmFtaWx5PSdBcmlhbCcgZm9udC1zaXplPSczMicgZmlsbD0nIzk5OScgdGV4dC1hbmNob3I9J21pZGRsZSc+PzwvdGV4dD48L3N2Zz4="
 
 BEEP_JS = (
+    "var _audioCtx=null;"
+    "function _getAudioCtx(){"
+    "try{if(!_audioCtx){_audioCtx=new(window.AudioContext||window.webkitAudioContext)();}"
+    "if(_audioCtx.state==='suspended'){_audioCtx.resume();}"
+    "return _audioCtx;}catch(e){return null;}"
+    "}"
+    "function _unlockAudio(){var c=_getAudioCtx();if(!c)return;"
+    "try{var o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);"
+    "g.gain.value=0.0001;o.frequency.value=440;o.start();o.stop(c.currentTime+0.02);}catch(e){}"
+    "}"
+    "document.addEventListener('click',_unlockAudio,{once:true});"
+    "document.addEventListener('touchstart',_unlockAudio,{once:true});"
+    "document.addEventListener('keydown',_unlockAudio,{once:true});"
     "function _beep(n){"
     "try{"
-    "var c=new(window.AudioContext||window.webkitAudioContext)();"
+    "var c=_getAudioCtx();if(!c)return;"
     "var f=[880,660,880,1100,880,660,880];"
     "for(var i=0;i<(n||4);i++){(function(x){"
     "var o=c.createOscillator(),g=c.createGain();"
@@ -104,7 +117,7 @@ BEEP_JS = (
     "o.frequency.value=f[x%f.length];o.type='sine';"
     "var t=c.currentTime+x*0.22;"
     "g.gain.setValueAtTime(0,t);"
-    "g.gain.linearRampToValueAtTime(2.0,t+0.05);"
+    "g.gain.linearRampToValueAtTime(0.35,t+0.05);"
     "g.gain.exponentialRampToValueAtTime(0.001,t+0.38);"
     "o.start(t);o.stop(t+0.38);"
     "})(i);}"
@@ -683,8 +696,10 @@ def admin():
     for r in conn.execute("SELECT status,COUNT(*) as cnt FROM visitors GROUP BY status").fetchall():
         counts[r["status"]] = r["cnt"]
     recent_orders = [dict(r) for r in conn.execute("SELECT * FROM pantry_orders ORDER BY id DESC LIMIT 10").fetchall()]
+    latest_pending = conn.execute("SELECT id FROM visitors WHERE status='pending' ORDER BY id DESC LIMIT 1").fetchone()
     conn.close()
     pc = counts.get("pending",0); ac = counts.get("approved",0); rc = counts.get("rejected",0)
+    latest_pending_id = latest_pending["id"] if latest_pending else 0
 
     rows = ""
     for v in visitors:
@@ -787,7 +802,7 @@ def admin():
         + order_rows + "</table></div>"
         "</div>"
         "<script>" + BEEP_JS +
-        "var _lc=0,_oc=0,_ol=0;"
+        "var _lc=0,_oc=0,_ol=" + str(latest_pending_id) + ",_visitorWatchReady=true;"
         "function exportExcel(){var from=document.getElementById('f-from').value;var to=document.getElementById('f-to').value;var dept=document.getElementById('f-dept').value;var status=document.getElementById('f-status').value;window.open('/admin/export?from='+from+'&to='+to+'&dept='+dept+'&status='+status);}"
         "async function act(id,action){if(!confirm(action+' this visitor?'))return;var r=await fetch('/action/'+id+'/'+action,{headers:{'Accept':'application/json'}});var d=await r.json();if(action==='approve'){window.open('/pass/'+id);}location.reload();}"
         "async function checkout(id){if(!confirm('Checkout this visitor?'))return;await fetch('/api/checkout/'+id,{method:'POST'});location.reload();}"
@@ -795,11 +810,12 @@ def admin():
         "try{"
         "var r0=await fetch('/api/latest-pending');var d0=await r0.json();"
         "var r1=await fetch('/api/pending-count');var d1=await r1.json();"
-        "if(d0.visitor&&_ol>0&&d0.visitor.id>_ol){_beep(4);var msg='New visitor: '+d0.visitor.name+' for '+d0.visitor.person_to_meet;"
+        "if(_visitorWatchReady&&d0.visitor&&d0.visitor.id>_ol){_beep(4);var msg='New visitor: '+d0.visitor.name+' for '+d0.visitor.person_to_meet;"
         "if(Notification.permission==='granted'){new Notification('Maxwell',{body:msg});}"
         "document.getElementById('notif-banner').textContent=msg;document.getElementById('notif-banner').style.display='block';"
         "setTimeout(function(){document.getElementById('notif-banner').style.display='none';},10000);}"
         "if(d0.visitor){_ol=d0.visitor.id;}"
+        "_visitorWatchReady=true;"
         "_lc=d1.count;document.title=d1.count>0?'('+d1.count+') New! - Maxwell Admin':'Maxwell Admin';"
         "var r2=await fetch('/api/order-count');var d2=await r2.json();"
         "if(_oc>0&&d2.count>_oc&&d2.latest){var l=d2.latest;"
@@ -1102,7 +1118,11 @@ def employee_dashboard():
     all_visitors = [dict(r) for r in conn.execute(
         "SELECT * FROM visitors WHERE person_to_meet=? ORDER BY id DESC LIMIT 20",(name,)
     ).fetchall()]
+    latest_host_pending = conn.execute(
+        "SELECT id FROM visitors WHERE person_to_meet=? AND status='pending' ORDER BY id DESC LIMIT 1",(name,)
+    ).fetchone()
     conn.close()
+    latest_host_pending_id = latest_host_pending["id"] if latest_host_pending else 0
 
     drinks_opts = "".join('<option value="' + d + '">' + d + '</option>' for d in DRINKS_MENU)
 
@@ -1182,7 +1202,7 @@ def employee_dashboard():
         "<table><tr><th>Name</th><th>Phone</th><th>Purpose</th><th>In Time</th><th>Out Time</th><th>Status</th><th>Action</th></tr>"
         + hist_rows + "</table></div></div>"
         "<script>" + BEEP_JS +
-        "var _qty={},_lc=0,_oc=0,_lv=0;"
+        "var _qty={},_lc=0,_oc=0,_lv=" + str(latest_host_pending_id) + ",_hostWatchReady=true;"
         "function changeQty(vid,delta){if(!_qty[vid])_qty[vid]=1;_qty[vid]=Math.max(1,_qty[vid]+delta);document.getElementById('qty-'+vid).textContent=_qty[vid];}"
         "async function confirmOrder(vid,vname,person){"
         "var drink=document.getElementById('drk-'+vid).value;"
@@ -1197,14 +1217,15 @@ def employee_dashboard():
         "async function act(id,action){if(!confirm(action+' this visitor?'))return;var r=await fetch('/action/'+id+'/'+action,{headers:{'Accept':'application/json'}});var d=await r.json();if(action==='approve'){window.open('/pass/'+id);}location.reload();}"
         "async function checkout(id){if(!confirm('Checkout visitor?'))return;await fetch('/api/checkout/'+id,{method:'POST'});location.reload();}"
         "async function checkNew(){try{"
-        "var r0=await fetch('/api/latest-pending?host="+name+"');var d0=await r0.json();"
+        "var r0=await fetch('/api/latest-pending?host='+encodeURIComponent('"+name+"'));var d0=await r0.json();"
         "var r1=await fetch('/api/pending-count');var d1=await r1.json();"
-        "if(d0.visitor&&_lv>0&&d0.visitor.id>_lv){_beep(4);"
+        "if(_hostWatchReady&&d0.visitor&&d0.visitor.id>_lv){_beep(4);"
         "var vmsg='New visitor waiting: '+d0.visitor.name;"
         "document.getElementById('notif-banner').textContent=vmsg;"
         "document.getElementById('notif-banner').style.display='block';"
         "setTimeout(function(){document.getElementById('notif-banner').style.display='none';},15000);}"
         "if(d0.visitor){_lv=d0.visitor.id;}"
+        "_hostWatchReady=true;"
         "_lc=d1.count;document.title=d1.count>0?'('+d1.count+') New - "+name+"':'"+name+" Dashboard';"
         "var r2=await fetch('/api/order-count');var d2=await r2.json();"
         "if(_oc>0&&d2.count>_oc&&d2.latest){"
