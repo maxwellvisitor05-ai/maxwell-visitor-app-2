@@ -31,10 +31,8 @@ app = Flask(__name__)
 app.secret_key = "maxwell2024secret"
 DB = "maxwell_visitors.db"
 
-SMTP_USERNAME   = os.environ.get("SMTP_USERNAME", os.environ.get("SENDER_EMAIL", "abc81a001@smtp-brevo.com"))
-SMTP_PASSWORD   = os.environ.get("SMTP_PASSWORD", os.environ.get("SENDER_PASSWORD", "xsmtpsib-0d9349ff85dcbcb8ffc1ab463f99e1c5e11f780be1e91a91a129f70f6c1ec28d-FXgz0FhVSKSiVpvG"))
-SENDER_EMAIL    = os.environ.get("SENDER_EMAIL", "info@maxwells.in")
-SENDER_NAME     = os.environ.get("SENDER_NAME", "Maxwell Visitor Management")
+SENDER_EMAIL    = os.environ.get("SENDER_EMAIL", "abc81a001@smtp-brevo.com")
+SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD", "xsmtpsib-0d9349ff85dcbcb8ffc1ab463f99e1c5e11f780be1e91a91a129f70f6c1ec28d-FXgz0FhVSKSiVpvG")
 ADMIN_EMAIL     = os.environ.get("ADMIN_EMAIL", "info@maxwells.in")
 ADMIN_PIN       = os.environ.get("ADMIN_PIN", "1234")
 PANTRY_EMAIL    = os.environ.get("PANTRY_EMAIL", "maxwellvisitor05@gmail.com")
@@ -93,24 +91,24 @@ PASS_COLORS = {
 DRINKS_MENU = ["Water", "Tea", "Coffee", "Green Tea", "Black Coffee", "Juice", "Other"]
 DEFAULT_PHOTO = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHdpZHRoPSc4MCcgaGVpZ2h0PSc4MCc+PGNpcmNsZSBjeD0nNDAnIGN5PSc0MCcgcj0nNDAnIGZpbGw9JyNlMGUwZTAnLz48dGV4dCB4PSc0MCcgeT0nNTAnIGZvbnQtZmFtaWx5PSdBcmlhbCcgZm9udC1zaXplPSczMicgZmlsbD0nIzk5OScgdGV4dC1hbmNob3I9J21pZGRsZSc+PzwvdGV4dD48L3N2Zz4="
 
-BEEP_JS = (
-    "function _beep(n){"
-    "try{"
-    "var c=new(window.AudioContext||window.webkitAudioContext)();"
-    "var f=[880,660,880,1100,880,660,880];"
-    "for(var i=0;i<(n||4);i++){(function(x){"
-    "var o=c.createOscillator(),g=c.createGain();"
-    "o.connect(g);g.connect(c.destination);"
-    "o.frequency.value=f[x%f.length];o.type='sine';"
-    "var t=c.currentTime+x*0.22;"
-    "g.gain.setValueAtTime(0,t);"
-    "g.gain.linearRampToValueAtTime(2.0,t+0.05);"
-    "g.gain.exponentialRampToValueAtTime(0.001,t+0.38);"
-    "o.start(t);o.stop(t+0.38);"
-    "})(i);}"
-    "}catch(e){}"
-    "}"
-)
+BEEP_JS = """
+function _beep(n){
+  try{
+    var c=new(window.AudioContext||window.webkitAudioContext)();
+    var f=[880,660,880,1100,880,660,880];
+    for(var i=0;i<(n||4);i++){(function(x){
+      var o=c.createOscillator(),g=c.createGain();
+      o.connect(g);g.connect(c.destination);
+      o.frequency.value=f[x%f.length];o.type='sine';
+      var t=c.currentTime+x*0.22;
+      g.gain.setValueAtTime(0,t);
+      g.gain.linearRampToValueAtTime(2.0,t+0.05);
+      g.gain.exponentialRampToValueAtTime(0.001,t+0.38);
+      o.start(t);o.stop(t+0.38);
+    })(i);}
+  }catch(e){}
+}
+"""
 
 def get_ist():
     ist = timezone(timedelta(hours=5, minutes=30))
@@ -150,23 +148,18 @@ def get_db():
 
 def send_email(to_list, subject, body):
     try:
-        to_list = [x for x in to_list if x]
-        if not to_list:
-            print("Email skipped: no recipients")
-            return
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
-        msg["From"]    = SENDER_NAME + " <" + SENDER_EMAIL + ">"
+        msg["From"]    = SENDER_EMAIL
         msg["To"]      = ", ".join(to_list)
-        msg["Reply-To"] = ADMIN_EMAIL
         msg.attach(MIMEText(body, "html"))
         with smtplib.SMTP("smtp-relay.brevo.com", 2525) as s:
             s.starttls()
-            s.login(SMTP_USERNAME, SMTP_PASSWORD)
+            s.login(SENDER_EMAIL, SENDER_PASSWORD)
             s.sendmail(SENDER_EMAIL, to_list, msg.as_string())
             print("Email sent to:", to_list)
     except Exception as e:
-        print("Email error:", repr(e), "Recipients:", to_list, "Subject:", subject)
+        print("Email error:", e)
 
 def notify_new_visitor(v):
     recipients = [ADMIN_EMAIL, HOST_NOTIFY_EMAIL]
