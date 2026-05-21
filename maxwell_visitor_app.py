@@ -4,9 +4,7 @@
 from flask import Flask, request, jsonify, redirect, session, send_file
 import sqlite3, base64, io, threading, os, hashlib, random, time
 from datetime import datetime, timezone, timedelta
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-import smtplib
+
 
 try:
     import qrcode
