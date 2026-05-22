@@ -1210,6 +1210,9 @@ def employee_login():
                 session.permanent = True
                 session["emp_name"] = emp_name
                 session["emp_email"] = email
+                session.permanent = True
+
+
                 if is_default:
                     session["force_pw_change"] = True
                 return redirect("/employee-dashboard")
@@ -1258,6 +1261,13 @@ def employee_login():
         "<div class='pw-wrap'><input type='password' name='password' id='pw' placeholder='Enter password' required>"
         "<button type='button' class='eye-btn' onclick='var f=document.getElementById(&quot;pw&quot;);f.type=f.type===&quot;password&quot;?&quot;text&quot;:&quot;password&quot;'>&#128065;</button></div>"
         "<button type='submit' class='sbtn'>LOGIN</button></form>"
+<a href="#" 
+onclick="alert('Please contact Admin to reset your password')"
+style="display:block;text-align:center;margin-top:14px;
+color:#1565C0;font-weight:600;text-decoration:none;">
+Forgot Password?
+</a>
+
         + ("<p class='err'>" + err + "</p>" if err else "")
         + "</div><a href='/'>&#8592; Back to Visitor Form</a>"
         "</body></html>"
@@ -1267,6 +1277,8 @@ def employee_login():
 def employee_dashboard():
     if not session.get("emp_name"): return redirect("/employee-login")
     name = session["emp_name"]
+session.permanent = True
+
     conn = get_db()
     
     visitors = [dict(r) for r in conn.execute(
@@ -1537,14 +1549,22 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-s
     <img src="MAXWELL_LOGO" class="hdr-logo" alt="Maxwell">
     <div class="hdr-greeting">
         <div class="hdr-hello" id="greeting-txt">Good Morning,</div>
-        <div class="hdr-name">""" + name + """</div>
+        ```html id="newhdr"
+<div class="hdr-name">
+    <div style="font-size:13px;opacity:0.8">Good Evening,</div>
+    <div style="font-size:24px;font-weight:700">""" + name + """</div>
+    <div style="font-size:13px;opacity:0.8">HR Executive • HR Department</div>
+</div>
+
     </div>
     <div class="hdr-actions">
         <button class="notif-btn" id="notif-bell">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
             <div class="notif-dot" id="notif-count" style="display:none">0</div>
         </button>
-        <div class="profile-btn">👤</div>
+<div class="profile-btn">
+    <img src="/static/default-user.png" style="width:100%;height:100%;border-radius:50%;object-fit:cover">
+</div>
     </div>
 </div>
 """ + SOUND_WIDGET + """
@@ -1683,7 +1703,20 @@ function checkOrderReveal(){
         var sec=document.getElementById('order-'+vid);
         if(sec){
             if(diff>=7){sec.style.display='block';if(lbl)lbl.textContent='';}
-            else{sec.style.display='none';if(lbl)lbl.textContent='☕ Order options available in '+(7-diff)+' min';}
+          ```javascript id="newtimer"
+else{
+    sec.style.display='none';
+
+    var hasDrink = document.getElementById('drk-'+vid)?.value;
+
+    if(lbl && hasDrink){
+        lbl.textContent='☕ Order options available in '+(7-diff)+' min';
+    }else if(lbl){
+        lbl.textContent='';
+    }
+}
+```
+
         }
         if(diff>=20&&!_reminded[vid]){
             _reminded[vid]=true;_beep(4);
@@ -1696,6 +1729,15 @@ async function confirmOrder(vid,vname,person){
     var drink=document.getElementById('drk-'+vid).value;
     var qty=_qty[vid]||1;
     var snacks=document.getElementById('snk-'+vid).value;
+const ADMIN_HOSTS = ["Pooja Lokhande", "Management", "Others"];
+
+const currentEmployee = `""" + name + """`;
+
+if(person !== currentEmployee && !ADMIN_HOSTS.includes(person)){
+    alert("You can order only for your own visitors");
+    return;
+}
+
     if(!drink&&!snacks){alert('Please select a drink or enter snacks!');return;}
     var r=await fetch('/api/beverage',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({visitor_id:vid,visitor_name:vname,person_to_meet:person,drink:drink,quantity:qty,snacks:snacks})});
