@@ -1186,6 +1186,7 @@ def employee_login():
             emp_name = emp_map[email]
             pw_ok, is_default = check_emp_password(email, password, emp_name)
             if pw_ok:
+                session.permanent = True
                 session["emp_name"] = emp_name
                 session["emp_email"] = email
                 if is_default:
