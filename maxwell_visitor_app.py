@@ -1268,315 +1268,512 @@ def employee_dashboard():
     if not session.get("emp_name"): return redirect("/employee-login")
     name = session["emp_name"]
     conn = get_db()
+    
     visitors = [dict(r) for r in conn.execute(
-        "SELECT * FROM visitors WHERE person_to_meet=? AND status=\'approved\' AND checkout_at IS NULL ORDER BY id DESC",(name,)
+        "SELECT * FROM visitors WHERE person_to_meet=? AND status='approved' AND checkout_at IS NULL ORDER BY id DESC",(name,)
     ).fetchall()]
     all_visitors = [dict(r) for r in conn.execute(
-        "SELECT * FROM visitors WHERE person_to_meet=? ORDER BY id DESC LIMIT 20",(name,)
+        "SELECT * FROM visitors WHERE person_to_meet=? ORDER BY id DESC LIMIT 10",(name,)
     ).fetchall()]
-    latest_hp = conn.execute("SELECT id FROM visitors WHERE person_to_meet=? AND status=\'pending\' ORDER BY id DESC LIMIT 1",(name,)).fetchone()
+    pending_visitors = [dict(r) for r in conn.execute(
+        "SELECT * FROM visitors WHERE person_to_meet=? AND status='pending' ORDER BY id DESC",(name,)
+    ).fetchall()]
+    latest_hp = conn.execute("SELECT id FROM visitors WHERE person_to_meet=? AND status='pending' ORDER BY id DESC LIMIT 1",(name,)).fetchone()
+    
+    today = get_ist()[:10]
+    today_count = conn.execute("SELECT COUNT(*) as cnt FROM visitors WHERE person_to_meet=? AND created_at LIKE ?", (name, today+"%")).fetchone()["cnt"]
+    checked_out = conn.execute("SELECT COUNT(*) as cnt FROM visitors WHERE person_to_meet=? AND checkout_at IS NOT NULL AND created_at LIKE ?", (name, today+"%")).fetchone()["cnt"]
+    in_house = conn.execute("SELECT COUNT(*) as cnt FROM visitors WHERE person_to_meet=? AND status='approved' AND checkout_at IS NULL", (name,)).fetchone()["cnt"]
+    orders_today = conn.execute("SELECT COUNT(*) as cnt FROM pantry_orders WHERE person_to_meet=? AND created_at LIKE ?", (name, today+"%")).fetchone()["cnt"]
+    pending_count = len(pending_visitors)
+    
     conn.close()
     latest_hp_id = latest_hp["id"] if latest_hp else 0
     force_change = session.get("force_pw_change", False)
-
     drinks_opts = "".join('<option value="' + d + '">' + d + '</option>' for d in DRINKS_MENU)
 
-    active_rows = ""
-    for v in visitors:
-        vid = str(v["id"])
-        # Check if 15 min passed since approval
-        created_ist = v.get("created_at","")
-        active_rows += (
-            "<div style=\'background:#E3F2FD;border-radius:10px;padding:16px;margin-bottom:14px\'>"
-            "<div style=\'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px\'>"
-            "<div><strong style=\'font-size:16px\'>" + str(v["name"]) + "</strong>"
-            "<span style=\'color:#666;font-size:12px;margin-left:10px\'>" + created_ist + "</span></div>"
-            "<button style=\'background:#C62828;color:white;border:none;padding:6px 12px;border-radius:5px;cursor:pointer;font-weight:600\' onclick=\'checkout("+vid+")\'>"
-            "&#128682; Checkout</button></div>"
-            "<div style=\'font-size:13px;color:#444;margin-bottom:12px\'>Purpose: " + str(v["purpose"]) + "</div>"
-            "<div id=\'order-section-"+vid+"\' style=\'display:none\'>"
-            "<div style=\'background:white;border-radius:8px;padding:12px;margin-bottom:8px\'>"
-            "<div style=\'font-size:13px;font-weight:700;color:#1565C0;margin-bottom:8px\'>&#9749; Order Drink</div>"
-            "<div style=\'display:flex;align-items:center;gap:10px;flex-wrap:wrap\'>"
-            "<select id=\'drk-"+vid+"\' style=\'padding:8px 12px;border:1.5px solid #ddd;border-radius:8px;font-size:13px;flex:1;min-width:140px\'>"
-            "<option value=\'\'>-- Select Drink (Optional) --</option>" + drinks_opts + "</select>"
-            "<div style=\'display:flex;align-items:center;gap:6px\'>"
-            "<button onclick=\'changeQty(\""+vid+"\",-1)\' style=\'width:32px;height:32px;border-radius:50%;border:1.5px solid #1565C0;background:white;color:#1565C0;font-size:18px;cursor:pointer;font-weight:700\'>&#8722;</button>"
-            "<span id=\'qty-"+vid+"\' style=\'font-size:16px;font-weight:700;min-width:30px;text-align:center\'>1</span>"
-            "<button onclick=\'changeQty(\""+vid+"\",1)\' style=\'width:32px;height:32px;border-radius:50%;border:1.5px solid #1565C0;background:white;color:#1565C0;font-size:18px;cursor:pointer;font-weight:700\'>+</button>"
-            "</div></div>"
-            "<input type=\'text\' id=\'note-"+vid+"\' placeholder=\'Special note...\'  style=\'width:100%;padding:8px;border:1.5px solid #ddd;border-radius:6px;margin-top:8px;font-size:13px\'>"
-            "</div>"
-            "<div style=\'background:white;border-radius:8px;padding:12px;margin-bottom:8px\'>"
-            "<div style=\'font-size:13px;font-weight:700;color:#1565C0;margin-bottom:8px\'>&#127860; Snacks (Optional)</div>"
-            "<input type=\'text\' id=\'snk-"+vid+"\' placeholder=\'e.g. Biscuits, Namkeen...\' style=\'width:100%;padding:8px;border:1.5px solid #ddd;border-radius:6px;font-size:13px\'>"
-            "</div>"
-            "<button onclick=\'confirmOrder(\""+vid+"\",\""+str(v["name"])+"\",\""+name+"\")\' "
-            "style=\'background:#1565C0;color:white;border:none;padding:10px 20px;border-radius:8px;cursor:pointer;font-weight:700;font-size:14px;width:100%\'>"
-            "&#9749; Confirm Order</button>"
-            "</div>"
-            "<div id=\'timer-lbl-"+vid+"\' style=\'font-size:12px;color:#F57F17;margin-top:6px\'></div>"
-            "</div>"
-        )
-    if not active_rows:
-        active_rows = "<div style=\'text-align:center;padding:30px;color:#999\'>No active visitors</div>"
-
-    hist_rows = ""
-    for v in all_visitors:
-        bc = "pending" if v["status"]=="pending" else ("approved" if v["status"]=="approved" else "rejected")
-        ab = ""
-        if v["status"] == "pending":
-            ab += '<button class="btn ba" onclick="act('+str(v["id"])+",'approve'"+')">&#10003; Approve</button>'
-            ab += '<button class="btn br" onclick="act('+str(v["id"])+",'reject'"+')">&#10005; Reject</button>'
-        co = v.get("checkout_at") or "-"
-        hist_rows += ("<tr><td><strong>" + str(v["name"]) + "</strong></td><td>" + str(v["phone"]) + "</td>"
-            "<td>" + str(v["purpose"]) + "</td><td style=\'font-size:11px\'>" + str(v["created_at"]) + "</td>"
-            "<td style=\'font-size:11px\'>" + co + "</td>"
-            "<td><span class=\'badge " + bc + "\'>" + v["status"].upper() + "</span></td>"
-            "<td>" + ab + "</td></tr>")
-    if not hist_rows:
-        hist_rows = "<tr><td colspan=\'7\' style=\'text-align:center;padding:20px;color:#999\'>No visitors</td></tr>"
-
-    # visitor created_at times for 15-min reveal + 20-min reminder
     import json
     visitor_times = {str(v["id"]): v.get("created_at","") for v in visitors}
 
-    return ("<!DOCTYPE html><html><head><meta charset=\'UTF-8\'><title>" + name + " Dashboard</title>"
-        "<style>*{box-sizing:border-box;margin:0;padding:0}"
-        "body{font-family:Segoe UI,Arial,sans-serif;background:#F0F2F5;padding-bottom:80px}"
-        ".header{background:linear-gradient(135deg,#1565C0,#0D47A1);color:white;padding:14px 16px;"
-        "display:flex;align-items:center;justify-content:space-between;"
-        "position:sticky;top:0;z-index:100;box-shadow:0 2px 12px rgba(0,0,0,0.25)}"
-        ".hdr-left{display:flex;align-items:center;gap:10px}"
-        ".hdr-logo{height:36px;object-fit:contain}"
-        ".hdr-greeting{font-size:11px;color:rgba(255,255,255,0.75)}"
-        ".hdr-name{font-size:15px;font-weight:800}"
-        ".hdr-right{display:flex;align-items:center;gap:8px}"
-        ".hdr-icon{width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,0.2);"
-        "display:flex;align-items:center;justify-content:center;font-size:16px;cursor:pointer;text-decoration:none;color:white}"
-        ".container{max-width:480px;margin:0 auto;padding:14px 12px}"
-        ".stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}"
-        ".stat-card{background:white;border-radius:14px;padding:14px;box-shadow:0 2px 8px rgba(0,0,0,0.06)}"
-        ".stat-icon{font-size:22px;margin-bottom:6px}"
-        ".stat-num{font-size:24px;font-weight:900;color:#1565C0}"
-        ".stat-lbl{font-size:11px;color:#888;font-weight:600}"
-        ".section-card{background:white;border-radius:16px;padding:16px;box-shadow:0 2px 10px rgba(0,0,0,0.07);margin-bottom:14px}"
-        ".section-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}"
-        ".section-title{font-size:15px;font-weight:800;color:#1A1A2E;display:flex;align-items:center;gap:8px}"
-        ".visitor-item{background:linear-gradient(135deg,#E3F2FD,#BBDEFB);border-radius:12px;"
-        "padding:14px;margin-bottom:10px;border-left:4px solid #1565C0}"
-        ".vi-name{font-size:16px;font-weight:800;color:#0D47A1}"
-        ".vi-time{font-size:11px;color:#666;margin-top:2px}"
-        ".vi-purpose{font-size:12px;color:#555;margin-top:6px;background:rgba(255,255,255,0.6);padding:6px 10px;border-radius:8px}"
-        ".checkout-btn{background:#e53935;color:white;border:none;padding:8px 16px;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer}"
-        ".hist-item{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #F0F0F0}"
-        ".hist-avatar{width:38px;height:38px;border-radius:50%;background:#1565C0;color:white;"
-        "display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;flex-shrink:0}"
-        ".hist-name{font-size:13px;font-weight:700;color:#333}"
-        ".hist-sub{font-size:11px;color:#999;margin-top:1px}"
-        ".hist-right{margin-left:auto;text-align:right}"
-        ".hist-time{font-size:11px;color:#aaa}"
-        ".badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:10px;font-weight:700}"
-        ".badge.pending{background:#FFF8E1;color:#F57F17}"
-        ".badge.approved{background:#E8F5E9;color:#2E7D32}"
-        ".badge.rejected{background:#FFEBEE;color:#C62828}"
-        ".btn{padding:6px 12px;border:none;border-radius:8px;cursor:pointer;font-size:11px;font-weight:600;margin:2px}"
-        ".ba{background:#2E7D32;color:white}.br{background:#C62828;color:white}"
-        ".notif-banner{background:#E3F2FD;border-left:4px solid #1565C0;border-radius:12px;"
-        "padding:12px 16px;margin-bottom:14px;display:none;font-weight:600;color:#1565C0;font-size:13px}"
-        ".force-banner{background:#FFF8E1;border-left:4px solid #F57F17;border-radius:12px;"
-        "padding:12px 16px;margin-bottom:14px;font-weight:600;color:#E65100;font-size:12px}"
-        ".bottom-nav{position:fixed;bottom:0;left:0;right:0;background:white;"
-        "display:flex;justify-content:space-around;padding:8px 0 12px;"
-        "box-shadow:0 -2px 15px rgba(0,0,0,0.1);z-index:100}"
-        ".nav-item{display:flex;flex-direction:column;align-items:center;gap:3px;"
-        "color:#999;font-size:10px;font-weight:600;cursor:pointer;padding:4px 14px;"
-        "border-radius:12px;text-decoration:none}"
-        ".nav-item.active{color:#1565C0;background:#E3F2FD}"
-        ".nav-icon{font-size:22px}"
-        "</style></head><body>"
-        "<div class=\'header\'>"
-        "<img src=\'LOGO1\' class=\'hdr-logo\' alt=\'Maxwell\'>"
-        "<h1 style=\'font-size:16px\'>" + name + " Dashboard</h1>"
-        "<div><a href=\'/change-password\' style=\'background:#F57F17\'>&#128274; Change Password</a>"
-        "<a href=\'/\'>Form</a><a href=\'/employee-logout\'>Logout</a></div></div>"
-        + SOUND_WIDGET +
-        "<div class=\'container\'>"
-        "<div class=\'notif-banner\' id=\'notif-banner\'></div>"
-        + ("<div class=\'force-banner\'>&#128274; Please change your default password! <a href=\'/change-password\' style=\'color:#1565C0\'>Change Now</a></div>" if force_change else "")
-        + "<div class=\'card\'><h3>&#128100; Active Visitors</h3>" + active_rows + "</div>"
-        "<div class=\'card\'><h3>&#128203; Visitor History</h3>"
-        "<table><tr><th>Name</th><th>Phone</th><th>Purpose</th><th>In Time</th><th>Out Time</th><th>Status</th><th>Action</th></tr>"
-        + hist_rows + "</table></div></div>"
-        "<script>" + BEEP_JS +
-        "var _qty={},_lc=0,_oc=0,_lv=" + str(latest_hp_id) + ",_hwr=true;"
-        "var _vt=" + json.dumps(visitor_times) + ";"
-        "var _reminded={};"
-        "function changeQty(vid,delta){if(!_qty[vid])_qty[vid]=1;_qty[vid]=Math.max(1,_qty[vid]+delta);document.getElementById(\'qty-\'+vid).textContent=_qty[vid];}"
-        "function parseIST(s){var p=s.split(\' \');var dp=p[0].split(\'-\');var tp=p[1].split(\':\');return new Date(parseInt(dp[2]),parseInt(dp[1])-1,parseInt(dp[0]),parseInt(tp[0]),parseInt(tp[1]));}"
-        # Show order section after 15 min
-        "function checkOrderReveal(){"
-        "var now=new Date();"
-        "Object.keys(_vt).forEach(function(vid){"
-        "var ot=parseIST(_vt[vid]);var diff=Math.floor((now-ot)/60000);"
-        "var sec=document.getElementById(\'order-section-\'+vid);"
-        "var lbl=document.getElementById(\'timer-lbl-\'+vid);"
-        "if(sec){"
-        "if(diff>=7){sec.style.display=\'block\';if(lbl)lbl.textContent=\'\';"
-        "}else{sec.style.display=\'none\';if(lbl)lbl.textContent=\'&#9749; Order options in \'+(7-diff)+\' min\';}"
-        "}"
-        # 20 min reminder
-        "if(diff>=20&&!_reminded[vid]){"
-        "_reminded[vid]=true;"
-        "_beep(4);"
-        "showNotif(\'&#128276; Please order tea/coffee/snacks for your guest!\',15000);"
-        "}"
-        "});"
-        "}"
-        "async function confirmOrder(vid,vname,person){"
-        "var drink=document.getElementById(\'drk-\'+vid).value;"
-        "var qty=_qty[vid]||1;"
-        "var note=document.getElementById(\'note-\'+vid).value;"
-        "var snacks=document.getElementById(\'snk-\'+vid).value;"
-        "if(!drink&&!snacks){alert(\'Please select a drink or enter snacks!\');return;}"
-        "var r=await fetch(\'/api/beverage\',{method:\'POST\',headers:{\'Content-Type\':\'application/json\'},"
-        "body:JSON.stringify({visitor_id:vid,visitor_name:vname,person_to_meet:person,drink:drink,quantity:qty,note:note,snacks:snacks})});"
-        "var d=await r.json();"
-        "if(d.success){alert(\'Order sent to Pantry!\');location.reload();}}"
-        "async function act(id,action){if(!confirm(action+\' this visitor?\'))return;var r=await fetch(\'/action/\'+id+\'/\'+action,{headers:{\'Accept\':\'application/json\'}});var d=await r.json();if(action===\'approve\'){window.open(\'/pass/\'+id);}location.reload();}"
-        "async function checkout(id){if(!confirm(\'Checkout visitor?\'))return;await fetch(\'/api/checkout/\'+id,{method:\'POST\'});location.reload();}"
-        "function showNotif(msg,dur){var b=document.getElementById(\'notif-banner\');b.innerHTML=msg;b.style.display=\'block\';setTimeout(function(){b.style.display=\'none\';},dur||8000);}"
-        "async function checkNew(){try{"
-        "var r0=await fetch(\'/api/latest-pending?host=\'+encodeURIComponent(\'"+name+"\'));var d0=await r0.json();"
-        "if(_hwr&&d0.visitor&&d0.visitor.id>_lv){_beep(4);"
-        "showNotif(\'&#128276; New visitor waiting: \'+d0.visitor.name,15000);}"
-        "if(d0.visitor)_lv=d0.visitor.id;_hwr=true;"
-        "var r1=await fetch(\'/api/pending-count\');var d1=await r1.json();"
-        "_lc=d1.count;document.title=d1.count>0?\'(\'+d1.count+\') New - "+name+"\':'" + name + " Dashboard\';"
-        "var r2=await fetch(\'/api/order-count\');var d2=await r2.json();"
-        "if(_oc>0&&d2.count>_oc&&d2.latest){var l=d2.latest;"
-        "if(l.person_to_meet===\'"+name+"\'){_beep(4);"
-        "var msg=\'&#9749; Order for \'+l.visitor_name+\': \'+l.drink+\' x\'+l.quantity;"
-        "if(l.snacks)msg+=\' + Snacks: \'+l.snacks;"
-        "showNotif(msg,15000);}}"
-        "_oc=d2.count;"
-        "var r3=await fetch('/api/latest-visitor');var d3=await r3.json();"
-        "if(d3.visitors){"
-        "var total=d3.visitors.length;"
-        "var inhouse=d3.visitors.filter(function(x){return x.status==='approved'&&!x.checkout_at;}).length;"
-        "var checkout=d3.visitors.filter(function(x){return x.checkout_at;}).length;"
-        "var el1=document.getElementById('s-total');if(el1)el1.textContent=total;"
-        "var el2=document.getElementById('s-in');if(el2)el2.textContent=inhouse;"
-        "var el3=document.getElementById('s-out');if(el3)el3.textContent=checkout;}"
-        "var r4=await fetch('/api/order-count');var d4=await r4.json();"
-        "var el4=document.getElementById('s-orders');if(el4)el4.textContent=d4.count||0;"
-        "}catch(e){}}"
-        "setInterval(checkNew,8000);checkNew();"
-        "setInterval(checkOrderReveal,30000);checkOrderReveal();"
-        "<nav style='position:fixed;bottom:0;left:0;right:0;background:white;""display:flex;justify-content:space-around;padding:8px 0 10px;""box-shadow:0 -2px 15px rgba(0,0,0,0.1);z-index:100'>""<a href='/employee-dashboard' style='display:flex;flex-direction:column;align-items:center;""gap:3px;color:#1565C0;font-size:10px;font-weight:700;text-decoration:none;""background:#E3F2FD;padding:6px 16px;border-radius:12px'>""<span style='font-size:20px'>&#128100;</span>Visitors</a>""<a href='/change-password' style='display:flex;flex-direction:column;align-items:center;""gap:3px;color:#777;font-size:10px;font-weight:600;text-decoration:none;padding:6px 16px'>""<span style='font-size:20px'>&#128274;</span>Password</a>""<a href='/' style='display:flex;flex-direction:column;align-items:center;""gap:3px;color:#777;font-size:10px;font-weight:600;text-decoration:none;padding:6px 16px'>""<span style='font-size:20px'>&#128203;</span>Form</a>""<a href='/employee-logout' style='display:flex;flex-direction:column;align-items:center;""gap:3px;color:#777;font-size:10px;font-weight:600;text-decoration:none;padding:6px 16px'>""<span style='font-size:20px'>&#128682;</span>Logout</a>""</nav>"
-        "</script></body></html>").replace("\'","\'").replace("LOGO1", LOGO_MAIN)
+    # ── Active Visitor Cards ──
+    active_cards = ""
+    for v in visitors:
+        vid = str(v["id"])
+        active_cards += f"""
+        <div class="av-card" id="avc-{vid}">
+            <div class="av-top">
+                <div class="av-left">
+                    <div class="av-name">{v['name']}</div>
+                    <div class="av-time">{v['created_at']}</div>
+                    <div class="av-purpose">Purpose: {v['purpose']}</div>
+                </div>
+                <button class="checkout-btn" onclick="checkout({vid})">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16,17 21,12 16,7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                    Checkout
+                </button>
+            </div>
+            
+            <div class="order-section" id="order-{vid}">
+                <div class="order-block">
+                    <div class="order-block-title">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#1565C0" stroke-width="2"><path d="M17 8h1a4 4 0 1 1 0 8h-1"/><path d="M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4z"/><line x1="6" y1="2" x2="6" y2="4"/><line x1="10" y1="2" x2="10" y2="4"/><line x1="14" y1="2" x2="14" y2="4"/></svg>
+                        Order Drink
+                    </div>
+                    <div class="drink-row">
+                        <div class="drink-select-wrap">
+                            <svg class="drink-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="2"><path d="M17 8h1a4 4 0 1 1 0 8h-1"/><path d="M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4z"/></svg>
+                            <select id="drk-{vid}" class="drink-select">
+                                <option value="">Select drink...</option>
+                                {drinks_opts}
+                            </select>
+                        </div>
+                        <div class="qty-wrap">
+                            <button class="qty-btn" onclick="changeQty('{vid}',-1)">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                            </button>
+                            <span id="qty-{vid}" class="qty-num">1</span>
+                            <button class="qty-btn" onclick="changeQty('{vid}',1)">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="order-block" style="margin-top:10px">
+                    <div class="order-block-title">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#1565C0" stroke-width="2"><path d="M3 2h18l-2 7H5L3 2z"/><path d="M5 9l1 11h12l1-11"/></svg>
+                        Snacks (Optional)
+                    </div>
+                    <input type="text" id="snk-{vid}" placeholder="e.g. Biscuits, Namkeen..." class="snacks-input">
+                </div>
+                
+                <button class="confirm-order-btn" onclick="confirmOrder('{vid}','{v['name']}','{name}')">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+                    Confirm Order
+                </button>
+            </div>
+            <div id="timer-lbl-{vid}" class="timer-label"></div>
+        </div>"""
 
-@app.route("/change-password", methods=["GET","POST"])
-def change_password():
-    if not session.get("emp_name"): return redirect("/employee-login")
-    email = session.get("emp_email","")
-    name  = session.get("emp_name","")
-    err = ""
-    if request.method == "POST":
-        new_pw  = request.form.get("new_password","").strip()
-        confirm = request.form.get("confirm_password","").strip()
-        if len(new_pw) < 6:
-            err = "Password must be at least 6 characters!"
-        elif new_pw != confirm:
-            err = "Passwords do not match!"
-        else:
-            otp = str(random.randint(100000, 999999))
-            expires = time.time() + 600
-            conn = get_db()
-            conn.execute("INSERT OR REPLACE INTO otp_store (email,otp,expires_at) VALUES (?,?,?)", (email, otp, expires))
-            conn.commit(); conn.close()
-            session["pending_pw"] = hash_pw(new_pw)
-            session["show_otp"] = otp
-            return redirect("/verify-otp")
-    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Change Password</title>"
-        "<style>body{font-family:Arial;background:#f0f4f8}"
-        ".header{background:#1565C0;padding:10px 20px;display:flex;align-items:center;justify-content:center}"
-        ".box{max-width:420px;margin:50px auto;background:white;padding:35px;border-radius:13px;box-shadow:0 5px 18px rgba(0,0,0,0.1)}"
-        "h2{color:#1565C0;text-align:center;margin-bottom:16px}"
-        "label{display:block;font-size:13px;font-weight:600;color:#444;margin-bottom:5px;margin-top:14px}"
-        ".pw-wrap{position:relative}.pw-wrap input{padding-right:42px}"
-        ".eye-btn{position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:18px;color:#999}"
-        "input{width:100%;padding:11px;border:2px solid #e0e0e0;border-radius:7px;font-size:14px}"
-        "input:focus{outline:none;border-color:#1565C0}"
-        ".sbtn{width:100%;margin-top:20px;padding:12px;background:#1565C0;color:white;border:none;border-radius:7px;font-size:15px;font-weight:700;cursor:pointer}"
-        ".err{color:red;font-size:13px;margin-top:8px;text-align:center}"
-        ".info{background:#E3F2FD;padding:10px;border-radius:6px;font-size:12px;color:#1565C0;margin-bottom:15px;text-align:center}"
-        "a{display:block;text-align:center;margin-top:13px;color:#1565C0;font-size:13px}"
-        "</style></head><body>"
-        "<div class='header'><img src='LOGO1' style='height:50px;object-fit:contain' alt='Maxwell'></div>"
-        "<div class='box'><h2>&#128274; Change Password</h2>"
-        "<p style='text-align:center;color:#666;font-size:13px;margin-bottom:15px'>Hello " + name + "!</p>"
-        "<div class='info'>OTP will be shown on next screen (email disabled)</div>"
-        "<form method='POST'>"
-        "<label>New Password</label>"
-        "<div class='pw-wrap'><input type='password' name='new_password' id='p1' placeholder='Min 6 characters' required>"
-        "<button type='button' class='eye-btn' onclick='var f=document.getElementById(&quot;p1&quot;);f.type=f.type===&quot;password&quot;?&quot;text&quot;:&quot;password&quot;'>&#128065;</button></div>"
-        "<label>Confirm Password</label>"
-        "<div class='pw-wrap'><input type='password' name='confirm_password' id='p2' placeholder='Repeat password' required>"
-        "<button type='button' class='eye-btn' onclick='var f=document.getElementById(&quot;p2&quot;);f.type=f.type===&quot;password&quot;?&quot;text&quot;:&quot;password&quot;'>&#128065;</button></div>"
-        "<button type='submit' class='sbtn'>Send OTP</button></form>"
-        + ("<p class='err'>" + err + "</p>" if err else "")
-        + "<a href='/employee-dashboard'>&#8592; Back</a></div>"
-        "</body></html>").replace("LOGO1", LOGO_MAIN)
+    if not active_cards:
+        active_cards = '<div class="empty-state"><div class="es-icon">👤</div><div class="es-text">No active visitors</div><div class="es-sub">Visitors will appear here once approved</div></div>'
 
-@app.route("/verify-otp", methods=["GET","POST"])
-def verify_otp():
-    if not session.get("emp_name"): return redirect("/employee-login")
-    email = session.get("emp_email","")
-    debug_otp = session.get("show_otp","")
-    err = ""
-    if request.method == "POST":
-        entered = request.form.get("otp","").strip()
-        conn = get_db()
-        row = conn.execute("SELECT otp,expires_at FROM otp_store WHERE email=?", (email,)).fetchone()
-        conn.close()
-        if not row or time.time() > row["expires_at"]:
-            err = "OTP expired! Please try again."
-        elif entered != row["otp"]:
-            err = "Wrong OTP!"
+    # ── Pending Cards ──
+    pending_cards = ""
+    for v in pending_visitors:
+        vid = str(v["id"])
+        photo = v.get("photo") or DEFAULT_PHOTO
+        pending_cards += f"""
+        <div class="pending-item">
+            <img src="{photo}" class="pi-photo">
+            <div class="pi-info">
+                <div class="pi-name">{v['name']}</div>
+                <div class="pi-dept">{v['department']} · {v['purpose'][:25]}{'...' if len(v.get('purpose',''))>25 else ''}</div>
+                <div class="pi-time">{v['created_at']}</div>
+            </div>
+            <div class="pi-actions">
+                <button class="pi-approve" onclick="act({vid},'approve')">✓</button>
+                <button class="pi-reject" onclick="act({vid},'reject')">✗</button>
+            </div>
+        </div>"""
+
+    if not pending_cards:
+        pending_cards = '<div class="empty-state small"><div class="es-icon">✅</div><div class="es-text">No pending requests</div></div>'
+
+    # ── History Items ──
+    hist_items = ""
+    for v in all_visitors:
+        if v["status"] == "approved":
+            badge = '<span class="badge-approved">APPROVED</span>'
+        elif v["status"] == "rejected":
+            badge = '<span class="badge-rejected">REJECTED</span>'
         else:
-            new_hash = session.get("pending_pw","")
-            conn = get_db()
-            conn.execute("INSERT OR REPLACE INTO employee_passwords (email,password_hash,is_default) VALUES (?,?,0)", (email, new_hash))
-            conn.execute("DELETE FROM otp_store WHERE email=?", (email,))
-            conn.commit(); conn.close()
-            session.pop("pending_pw", None)
-            session.pop("force_pw_change", None)
-            session.pop("show_otp", None)
-            return redirect("/employee-dashboard")
-    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Verify OTP</title>"
-        "<style>body{font-family:Arial;background:#f0f4f8}"
-        ".header{background:#1565C0;padding:10px 20px;display:flex;align-items:center;justify-content:center}"
-        ".box{max-width:380px;margin:60px auto;background:white;padding:35px;border-radius:13px;box-shadow:0 5px 18px rgba(0,0,0,0.1);text-align:center}"
-        "h2{color:#1565C0;margin-bottom:8px}"
-        "input{width:100%;padding:14px;border:2px solid #ddd;border-radius:7px;font-size:24px;text-align:center;letter-spacing:10px;margin:15px 0}"
-        "input:focus{outline:none;border-color:#1565C0}"
-        "button{width:100%;padding:12px;background:#1565C0;color:white;border:none;border-radius:7px;font-size:15px;font-weight:700;cursor:pointer}"
-        ".err{color:red;font-size:13px;margin-top:8px}"
-        ".debug{background:#FFF8E1;border:1px solid #F57F17;padding:12px;border-radius:8px;margin:12px 0;font-size:14px;color:#E65100}"
-        "a{display:block;margin-top:13px;color:#1565C0;font-size:13px}"
-        "</style></head><body>"
-        "<div class='header'><img src='LOGO1' style='height:50px;object-fit:contain' alt='Maxwell'></div>"
-        "<div class='box'><div style='font-size:50px'>&#128231;</div>"
-        "<h2>Enter OTP</h2>"
-        "<p style='color:#666;font-size:13px'>For <b>" + email + "</b></p>"
-        + ("<div class='debug'>&#128274; Your OTP: <b style='font-size:22px;letter-spacing:6px'>" + debug_otp + "</b><br><small>(Email disabled)</small></div>" if debug_otp else "")
-        + "<form method='POST'>"
-        "<input type='text' name='otp' placeholder='000000' maxlength='6' inputmode='numeric' required autofocus>"
-        "<button type='submit'>&#10003; Verify</button></form>"
-        + ("<p class='err'>" + err + "</p>" if err else "")
-        + "<a href='/change-password'>&#8592; Try Again</a></div>"
-        "</body></html>").replace("LOGO1", LOGO_MAIN)
+            badge = '<span class="badge-pending">PENDING</span>'
+        
+        initials = (v.get("name","?")[:1]).upper()
+        bg = "#2E7D32" if v["status"]=="approved" else "#C62828" if v["status"]=="rejected" else "#F57F17"
+        
+        hist_items += f"""
+        <div class="hist-row" onclick="{'window.open(\"/pass/'+str(v['id'])+'\")' if v['status']=='approved' else ''}">
+            <div class="hist-av" style="background:{bg}">{initials}</div>
+            <div class="hist-info">
+                <div class="hist-name">{v['name']}</div>
+                <div class="hist-purpose">{v['purpose'][:30]}{'...' if len(v.get('purpose',''))>30 else ''}</div>
+            </div>
+            <div class="hist-right">
+                <div class="hist-time">{v['created_at'][:16]}</div>
+                {badge}
+            </div>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#CCC" stroke-width="2" style="margin-left:4px"><polyline points="9,18 15,12 9,6"/></svg>
+        </div>"""
+
+    if not hist_items:
+        hist_items = '<div class="empty-state small"><div class="es-icon">📋</div><div class="es-text">No history yet</div></div>'
+
+    return ("""<!DOCTYPE html>
+<html><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>""" + name + """ · Maxwell</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;background:#F2F4F7;min-height:100vh;padding-bottom:90px;color:#1A1A2E}
+
+/* ── HEADER ── */
+.header{background:linear-gradient(135deg,#1565C0 0%,#0D47A1 100%);padding:12px 16px 14px;display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:200;box-shadow:0 2px 20px rgba(13,71,161,0.4)}
+.hdr-logo{height:38px;object-fit:contain}
+.hdr-greeting{flex:1;padding-left:4px}
+.hdr-hello{font-size:11px;color:rgba(255,255,255,0.75);font-weight:500;margin-bottom:1px}
+.hdr-name{font-size:16px;font-weight:800;color:white}
+.hdr-actions{display:flex;align-items:center;gap:10px}
+.notif-btn{position:relative;width:38px;height:38px;background:rgba(255,255,255,0.15);border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;border:none;color:white}
+.notif-dot{position:absolute;top:6px;right:6px;background:#FF5252;color:white;border-radius:50%;min-width:16px;height:16px;padding:0 3px;font-size:9px;font-weight:800;display:flex;align-items:center;justify-content:center;border:1.5px solid #0D47A1}
+.profile-btn{width:38px;height:38px;background:rgba(255,255,255,0.2);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;cursor:pointer;border:1.5px solid rgba(255,255,255,0.3)}
+
+/* ── ALERT ── */
+.alert-banner{margin:12px 14px 0;background:#FFF8E1;border:1.5px solid #FFB74D;border-radius:14px;padding:12px 16px;display:flex;align-items:center;justify-content:space-between}
+.alert-left{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:#E65100}
+.alert-link{font-size:12px;font-weight:700;color:#1565C0;text-decoration:none;border:1.5px solid #1565C0;padding:4px 10px;border-radius:8px;white-space:nowrap}
+
+/* ── NOTIF BAR ── */
+.notif-bar{margin:12px 14px 0;background:linear-gradient(135deg,#E3F2FD,#BBDEFB);border-left:4px solid #1565C0;border-radius:14px;padding:13px 16px;font-size:13px;font-weight:700;color:#0D47A1;display:none}
+
+/* ── SECTION WRAP ── */
+.page-content{padding:14px}
+
+/* ── ACTIVE VISITOR ── */
+.section-card{background:white;border-radius:20px;padding:18px;box-shadow:0 2px 15px rgba(0,0,0,0.07);margin-bottom:14px}
+.sc-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.sc-title{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:800;color:#1A1A2E}
+.sc-icon{width:32px;height:32px;background:#E3F2FD;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:16px}
+
+/* Active Visitor Card */
+.av-card{background:#F8FAFE;border-radius:14px;padding:14px;border:1.5px solid #E3F2FD}
+.av-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:12px}
+.av-name{font-size:16px;font-weight:800;color:#1A1A2E}
+.av-time{font-size:11px;color:#888;margin-top:3px}
+.av-purpose{font-size:12px;color:#555;margin-top:6px;font-weight:500}
+.checkout-btn{background:#E53935;color:white;border:none;border-radius:10px;padding:9px 14px;font-size:12px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:6px;white-space:nowrap;box-shadow:0 3px 12px rgba(229,57,53,0.3);flex-shrink:0}
+
+/* Order Blocks */
+.order-section{margin-top:4px}
+.order-block{background:white;border-radius:12px;padding:12px 14px;border:1.5px solid #EEF2FF}
+.order-block-title{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700;color:#1565C0;margin-bottom:10px}
+.drink-row{display:flex;align-items:center;gap:10px}
+.drink-select-wrap{flex:1;background:#F8F9FA;border:1.5px solid #E8ECF4;border-radius:10px;display:flex;align-items:center;padding:0 12px;height:44px}
+.drink-icon{flex-shrink:0;margin-right:4px}
+.drink-select{flex:1;border:none;background:transparent;font-size:14px;color:#333;outline:none;font-family:inherit;cursor:pointer}
+.qty-wrap{display:flex;align-items:center;gap:10px;flex-shrink:0}
+.qty-btn{width:36px;height:36px;border-radius:50%;border:2px solid #E0E7FF;background:white;color:#1565C0;display:flex;align-items:center;justify-content:center;cursor:pointer;font-weight:700;box-shadow:0 2px 6px rgba(0,0,0,0.06)}
+.qty-num{font-size:18px;font-weight:900;color:#1A1A2E;min-width:24px;text-align:center}
+.snacks-input{width:100%;background:#F8F9FA;border:1.5px solid #E8ECF4;border-radius:10px;padding:11px 14px;font-size:14px;color:#333;outline:none;font-family:inherit}
+.snacks-input:focus{border-color:#1565C0;background:white}
+.confirm-order-btn{width:100%;margin-top:12px;padding:14px;background:linear-gradient(135deg,#1565C0,#1976D2);color:white;border:none;border-radius:12px;font-size:15px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 4px 15px rgba(21,101,192,0.35)}
+.timer-label{font-size:12px;font-weight:600;color:#F57F17;margin-top:8px;text-align:center}
+
+/* ── STATS ROW ── */
+.stats-wrap{background:white;border-radius:20px;padding:14px;box-shadow:0 2px 15px rgba(0,0,0,0.07);margin-bottom:14px}
+.stats-row{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px}
+.stat-item{text-align:center;padding:8px 4px}
+.stat-item-icon{font-size:22px;margin-bottom:4px}
+.stat-item-num{font-size:20px;font-weight:900;line-height:1}
+.stat-item-lbl{font-size:10px;color:#888;font-weight:600;margin-top:3px;line-height:1.2}
+.si-blue .stat-item-num{color:#7C3AED}
+.si-green .stat-item-num{color:#2E7D32}
+.si-orange .stat-item-num{color:#E65100}
+.si-tea .stat-item-num{color:#1565C0}
+
+/* ── PENDING ── */
+.pending-item{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid #F5F5F5}
+.pending-item:last-child{border-bottom:none}
+.pi-photo{width:44px;height:44px;border-radius:50%;object-fit:cover;border:2px solid #E0E0E0;flex-shrink:0}
+.pi-info{flex:1;min-width:0}
+.pi-name{font-size:14px;font-weight:700;color:#1A1A2E}
+.pi-dept{font-size:11px;color:#888;margin-top:2px}
+.pi-time{font-size:10px;color:#1565C0;margin-top:2px;font-weight:600}
+.pi-actions{display:flex;gap:6px;flex-shrink:0}
+.pi-approve{width:34px;height:34px;background:#E8F5E9;color:#2E7D32;border:none;border-radius:50%;font-size:16px;font-weight:700;cursor:pointer}
+.pi-reject{width:34px;height:34px;background:#FFEBEE;color:#C62828;border:none;border-radius:50%;font-size:16px;font-weight:700;cursor:pointer}
+
+/* ── HISTORY ── */
+.hist-row{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid #F5F5F5;cursor:pointer}
+.hist-row:last-child{border-bottom:none}
+.hist-av{width:40px;height:40px;border-radius:50%;color:white;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;flex-shrink:0}
+.hist-info{flex:1;min-width:0}
+.hist-name{font-size:13px;font-weight:700;color:#1A1A2E}
+.hist-purpose{font-size:11px;color:#888;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hist-right{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0}
+.hist-time{font-size:10px;color:#AAA;white-space:nowrap}
+.badge-approved{background:#E8F5E9;color:#2E7D32;padding:3px 9px;border-radius:20px;font-size:10px;font-weight:700}
+.badge-rejected{background:#FFEBEE;color:#C62828;padding:3px 9px;border-radius:20px;font-size:10px;font-weight:700}
+.badge-pending{background:#FFF8E1;color:#F57F17;padding:3px 9px;border-radius:20px;font-size:10px;font-weight:700}
+.sh-link{font-size:12px;font-weight:700;color:#1565C0;text-decoration:none}
+
+/* ── FAB ── */
+.fab{position:fixed;bottom:90px;right:18px;width:54px;height:54px;background:linear-gradient(135deg,#1565C0,#1976D2);border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 20px rgba(21,101,192,0.45);cursor:pointer;z-index:150;border:none;color:white;text-decoration:none}
+
+/* ── BOTTOM NAV ── */
+.bottom-nav{position:fixed;bottom:0;left:0;right:0;background:white;display:flex;justify-content:space-around;align-items:center;padding:8px 0 max(16px,env(safe-area-inset-bottom));box-shadow:0 -2px 20px rgba(0,0,0,0.1);z-index:200}
+.nav-item{display:flex;flex-direction:column;align-items:center;gap:3px;text-decoration:none;color:#9E9E9E;font-size:10px;font-weight:600;padding:4px 14px;border-radius:12px;transition:0.15s;background:none;border:none;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.nav-item.active{color:#1565C0}
+.nav-svg{width:24px;height:24px;display:block}
+.nav-active-bar{width:4px;height:4px;background:#1565C0;border-radius:50%;margin:0 auto;display:none}
+.nav-item.active .nav-active-bar{display:block}
+
+/* ── EMPTY STATE ── */
+.empty-state{text-align:center;padding:28px 16px}
+.empty-state.small{padding:18px}
+.es-icon{font-size:36px;margin-bottom:8px}
+.es-text{font-size:14px;font-weight:700;color:#555}
+.es-sub{font-size:12px;color:#AAA;margin-top:4px}
+
+/* ── DIVIDER ── */
+.stat-divider{width:1px;background:#F0F0F0;align-self:stretch}
+</style>
+</head><body>
+
+<!-- HEADER -->
+<div class="header">
+    <img src="MAXWELL_LOGO" class="hdr-logo" alt="Maxwell">
+    <div class="hdr-greeting">
+        <div class="hdr-hello" id="greeting-txt">Good Morning,</div>
+        <div class="hdr-name">""" + name + """</div>
+    </div>
+    <div class="hdr-actions">
+        <button class="notif-btn" id="notif-bell">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+            <div class="notif-dot" id="notif-count" style="display:none">0</div>
+        </button>
+        <div class="profile-btn">👤</div>
+    </div>
+</div>
+""" + SOUND_WIDGET + """
+
+""" + ("""<div class="alert-banner"><div class="alert-left"><span>🔒</span><span>Please change your default password!</span></div><a href="/change-password" class="alert-link">Change Now</a></div>""" if force_change else "") + """
+
+<div class="notif-bar" id="notif-banner"></div>
+
+<div class="page-content">
+
+<!-- ACTIVE VISITOR -->
+<div class="section-card">
+    <div class="sc-header">
+        <div class="sc-title">
+            <div class="sc-icon">👤</div>
+            Active Visitor
+        </div>
+    </div>
+    """ + (active_cards if active_cards else '<div class="empty-state"><div class="es-icon">👤</div><div class="es-text">No active visitors</div><div class="es-sub">Visitors will appear here once approved</div></div>') + """
+</div>
+
+<!-- STATS -->
+<div class="stats-wrap">
+    <div class="stats-row">
+        <div class="stat-item si-blue">
+            <div class="stat-item-icon">👥</div>
+            <div class="stat-item-num">""" + str(today_count) + """</div>
+            <div class="stat-item-lbl">Today Visitors</div>
+        </div>
+        <div class="stat-item si-green">
+            <div class="stat-item-icon">✅</div>
+            <div class="stat-item-num">""" + str(checked_out) + """</div>
+            <div class="stat-item-lbl">Checked Out</div>
+        </div>
+        <div class="stat-item si-orange">
+            <div class="stat-item-icon">🕐</div>
+            <div class="stat-item-num">""" + str(in_house) + """</div>
+            <div class="stat-item-lbl">In House</div>
+        </div>
+        <div class="stat-item si-tea">
+            <div class="stat-item-icon">☕</div>
+            <div class="stat-item-num">""" + str(orders_today) + """</div>
+            <div class="stat-item-lbl">Orders Today</div>
+        </div>
+    </div>
+</div>
+
+<!-- PENDING -->
+<div class="section-card" id="pending-section" """ + ('style="display:none"' if pending_count == 0 else '') + """>
+    <div class="sc-header">
+        <div class="sc-title">
+            <div class="sc-icon">⏳</div>
+            Pending Approval
+        </div>
+        <span style="background:#FFF3E0;color:#E65100;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:700">""" + str(pending_count) + """</span>
+    </div>
+    """ + pending_cards + """
+</div>
+
+<!-- HISTORY -->
+<div class="section-card">
+    <div class="sc-header">
+        <div class="sc-title">
+            <div class="sc-icon" style="background:#FFF8E1">📋</div>
+            Recent Visitor History
+        </div>
+        <a href="#" class="sh-link" onclick="return false">View All</a>
+    </div>
+    """ + hist_items + """
+</div>
+
+</div><!-- end page-content -->
+
+<!-- FAB -->
+<a href="/" class="fab">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+</a>
+
+<!-- BOTTOM NAV -->
+<nav class="bottom-nav">
+    <button class="nav-item active" id="nav-home" onclick="scrollTo(0,0)">
+        <svg class="nav-svg" viewBox="0 0 24 24" fill="currentColor"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
+        <span>Dashboard</span>
+        <div class="nav-active-bar"></div>
+    </button>
+    <button class="nav-item" id="nav-visitors" onclick="switchToVisitors()">
+        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <span>Visitors</span>
+        <div class="nav-active-bar"></div>
+    </button>
+    <button class="nav-item" id="nav-pantry" onclick="location.href='/pantry'">
+        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:#1565C0"><path d="M17 8h1a4 4 0 1 1 0 8h-1"/><path d="M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4z"/><line x1="6" y1="2" x2="6" y2="4"/><line x1="10" y1="2" x2="10" y2="4"/><line x1="14" y1="2" x2="14" y2="4"/></svg>
+        <span>Pantry</span>
+        <div class="nav-active-bar"></div>
+    </button>
+    <button class="nav-item" id="nav-form" onclick="location.href='/'">
+        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10,9 9,9 8,9"/></svg>
+        <span>Form</span>
+        <div class="nav-active-bar"></div>
+    </button>
+    <button class="nav-item" id="nav-profile" onclick="location.href='/change-password'">
+        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        <span>Profile</span>
+        <div class="nav-active-bar"></div>
+    </button>
+</nav>
+
+<script>
+""" + BEEP_JS + """
+var _qty={}, _lc=0, _oc=0, _lv=""" + str(latest_hp_id) + """, _hwr=true, _notifCount=0;
+var _vt=""" + json.dumps(visitor_times) + """;
+var _reminded={};
+
+// Greeting
+var h=new Date().getHours();
+document.getElementById('greeting-txt').textContent=h<12?'Good Morning,':h<17?'Good Afternoon,':'Good Evening,';
+
+function changeQty(vid,delta){
+    if(!_qty[vid])_qty[vid]=1;
+    _qty[vid]=Math.max(1,_qty[vid]+delta);
+    document.getElementById('qty-'+vid).textContent=_qty[vid];
+}
+
+function parseIST(s){
+    if(!s)return new Date();
+    var p=s.split(' ');var dp=p[0].split('-');var tp=(p[1]||'0:0').split(':');
+    return new Date(parseInt(dp[2]),parseInt(dp[1])-1,parseInt(dp[0]),parseInt(tp[0]),parseInt(tp[1]));
+}
+
+function checkOrderReveal(){
+    var now=new Date();
+    Object.keys(_vt).forEach(function(vid){
+        var ot=parseIST(_vt[vid]);
+        var diff=Math.floor((now-ot)/60000);
+        var lbl=document.getElementById('timer-lbl-'+vid);
+        var sec=document.getElementById('order-'+vid);
+        if(sec){
+            if(diff>=7){sec.style.display='block';if(lbl)lbl.textContent='';}
+            else{sec.style.display='none';if(lbl)lbl.textContent='☕ Order options available in '+(7-diff)+' min';}
+        }
+        if(diff>=20&&!_reminded[vid]){
+            _reminded[vid]=true;_beep(4);
+            showNotif('🔔 Please order tea/coffee for your guest!',15000);
+        }
+    });
+}
+
+async function confirmOrder(vid,vname,person){
+    var drink=document.getElementById('drk-'+vid).value;
+    var qty=_qty[vid]||1;
+    var snacks=document.getElementById('snk-'+vid).value;
+    if(!drink&&!snacks){alert('Please select a drink or enter snacks!');return;}
+    var r=await fetch('/api/beverage',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({visitor_id:vid,visitor_name:vname,person_to_meet:person,drink:drink,quantity:qty,snacks:snacks})});
+    var d=await r.json();
+    if(d.success){showNotif('✅ Order sent to Pantry!',5000);}
+}
+
+async function act(id,action){
+    if(!confirm(action+' this visitor?'))return;
+    await fetch('/action/'+id+'/'+action,{headers:{'Accept':'application/json'}});
+    if(action==='approve'){window.open('/pass/'+id);}
+    location.reload();
+}
+
+async function checkout(id){
+    if(!confirm('Checkout this visitor?'))return;
+    await fetch('/api/checkout/'+id,{method:'POST'});
+    location.reload();
+}
+
+function showNotif(msg,dur){
+    var b=document.getElementById('notif-banner');
+    b.innerHTML=msg;b.style.display='block';
+    setTimeout(function(){b.style.display='none';},dur||8000);
+}
+
+function addNotifCount(){
+    _notifCount++;
+    var el=document.getElementById('notif-count');
+    el.style.display='flex';el.textContent=_notifCount;
+}
+
+function switchToVisitors(){
+    document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+    document.getElementById('nav-visitors').classList.add('active');
+    document.getElementById('pending-section').style.display='block';
+    document.getElementById('pending-section').scrollIntoView({behavior:'smooth'});
+}
+
+async function checkNew(){
+    try{
+        var r0=await fetch('/api/latest-pending?host='+encodeURIComponent('""" + name + """'));
+        var d0=await r0.json();
+        if(_hwr&&d0.visitor&&d0.visitor.id>_lv){
+            _beep(4);addNotifCount();
+            showNotif('🔔 New visitor: '+d0.visitor.name+' is waiting!',15000);
+        }
+        if(d0.visitor)_lv=d0.visitor.id;_hwr=true;
+
+        var r1=await fetch('/api/pending-count');
+        var d1=await r1.json();
+        _lc=d1.count;
+        document.title=d1.count>0?'('+d1.count+') Pending · """ + name + """':'""" + name + """ · Maxwell';
+
+        var r2=await fetch('/api/order-count');
+        var d2=await r2.json();
+        if(_oc>0&&d2.count>_oc&&d2.latest){
+            var l=d2.latest;
+            if(l.person_to_meet==='""" + name + """'){
+                _beep(3);addNotifCount();
+                showNotif('☕ Order status update: '+l.drink+' x'+l.quantity,10000);
+            }
+        }
+        _oc=d2.count;
+    }catch(e){}
+}
+
+if(Notification.permission==='default')Notification.requestPermission();
+setInterval(checkNew,8000);checkNew();
+setInterval(checkOrderReveal,30000);
+
+// Init: hide order sections, then check
+document.querySelectorAll('[id^="order-"]').forEach(function(el){
+    if(el.id.startsWith('order-')&&el.id!=='order-section')el.style.display='none';
+});
+checkOrderReveal();
+</script>
+</body></html>""").replace("MAXWELL_LOGO", LOGO_MAIN)
 
 @app.route("/employee-logout")
 def employee_logout():
