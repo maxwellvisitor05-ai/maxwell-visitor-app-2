@@ -36,12 +36,6 @@ except:
 
 app = Flask(__name__)
 app.secret_key = "maxwell2024secret"
-from datetime import timedelta
-app.permanent_session_lifetime = timedelta(days=30)
-
-@app.before_request
-def make_session_permanent():
-    session.permanent = True
 DB = "maxwell_visitors.db"
 
 SMTP_USERNAME     = os.environ.get("SMTP_USERNAME", "abc81a001@smtp-brevo.com")
@@ -301,12 +295,6 @@ def build_visitor_form(prefill):
     html = """<!DOCTYPE html><html lang="en"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Maxwell - Visitor Management</title>
-<link rel="manifest" href="/manifest.json">
-<meta name="theme-color" content="#1565C0">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Maxwell VM">
-<link rel="apple-touch-icon" href="/icon.png">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f4f8}
@@ -489,7 +477,6 @@ function capPhoto(){
 }
 function retake(){photoData=null;document.getElementById('photo-preview').style.display='none';document.getElementById('ret-btn').style.display='none';document.getElementById('ph-icon').style.display='block';startCam();}
 function showAlert(msg){document.getElementById('alert-box').innerHTML='<div class="alert alert-error">'+msg+'</div>';setTimeout(function(){document.getElementById('alert-box').innerHTML='';},5000);}
-if('serviceWorker' in navigator){window.addEventListener('load',function(){navigator.serviceWorker.register('/sw.js').then(function(){console.log('SW OK');}).catch(function(e){console.log('SW err',e);});});}
 async function submitForm(){
   var name=document.getElementById('v-name').value.trim();
   var phone=document.getElementById('v-phone').value.trim();
@@ -1192,7 +1179,6 @@ def employee_login():
             emp_name = emp_map[email]
             pw_ok, is_default = check_emp_password(email, password, emp_name)
             if pw_ok:
-                session.permanent = True
                 session["emp_name"] = emp_name
                 session["emp_email"] = email
                 if is_default:
@@ -1202,51 +1188,31 @@ def employee_login():
                 err = "Wrong password!"
         else:
             err = "Email not found."
-    return (
-        "<!DOCTYPE html><html><head>"
-        "<meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
-        "<title>Maxwell - Login</title>"
-        "<style>"
-        "*{box-sizing:border-box;margin:0;padding:0}"
-        "body{font-family:Segoe UI,Arial,sans-serif;min-height:100vh;"
-        "background:linear-gradient(160deg,#1565C0,#0D47A1);"
-        "display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px}"
-        ".la{margin-bottom:24px;text-align:center}"
-        ".la img{height:60px;object-fit:contain}"
-        ".la p{color:rgba(255,255,255,0.75);font-size:13px;margin-top:6px}"
-        ".box{background:white;border-radius:24px;padding:32px 28px;width:100%;max-width:390px;"
-        "box-shadow:0 25px 50px rgba(0,0,0,0.25)}"
-        ".box h2{color:#1565C0;text-align:center;font-size:22px;font-weight:800;margin-bottom:4px}"
-        ".sub{color:#aaa;text-align:center;font-size:13px;margin-bottom:22px}"
-        "label{display:block;font-size:13px;font-weight:600;color:#555;margin-bottom:6px;margin-top:16px}"
-        ".pw-wrap{position:relative}.pw-wrap input{padding-right:44px}"
-        ".eye-btn{position:absolute;right:13px;top:50%;transform:translateY(-50%);"
-        "background:none;border:none;cursor:pointer;font-size:18px;color:#bbb}"
-        "input{width:100%;padding:13px 16px;border:2px solid #eee;border-radius:12px;"
-        "font-size:15px;outline:none;background:#fafafa;transition:border 0.2s}"
-        "input:focus{border-color:#1565C0;background:white}"
-        "button.sbtn{width:100%;margin-top:22px;padding:15px;"
-        "background:linear-gradient(135deg,#1565C0,#1976D2);"
-        "color:white;border:none;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer;"
-        "box-shadow:0 6px 20px rgba(21,101,192,0.35)}"
-        ".err{color:#e53935;font-size:13px;margin-top:10px;text-align:center;"
-        "background:#ffebee;padding:10px;border-radius:10px;font-weight:500}"
-        "a{display:block;text-align:center;margin-top:16px;color:rgba(255,255,255,0.8);font-size:13px;text-decoration:none}"
+    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Employee Login</title>"
+        "<style>body{font-family:Arial;background:#f0f4f8}"
+        ".header{background:#1565C0;padding:10px 20px;display:flex;align-items:center;justify-content:center}"
+        ".box{max-width:400px;margin:60px auto;background:white;padding:38px;border-radius:13px;box-shadow:0 5px 18px rgba(0,0,0,0.1)}"
+        ".box h2{color:#1565C0;text-align:center;margin-bottom:22px}"
+        "label{display:block;font-size:13px;font-weight:600;color:#444;margin-bottom:5px;margin-top:14px}"
+        ".pw-wrap{position:relative}.pw-wrap input{padding-right:42px}"
+        ".eye-btn{position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:18px;color:#999}"
+        "input{width:100%;padding:11px;border:2px solid #e0e0e0;border-radius:7px;font-size:14px}"
+        "input:focus{outline:none;border-color:#1565C0}"
+        "button.sbtn{width:100%;margin-top:18px;padding:12px;background:#1565C0;color:white;border:none;border-radius:7px;font-size:15px;font-weight:700;cursor:pointer}"
+        ".err{color:red;font-size:13px;margin-top:8px;text-align:center}"
+        "a{display:block;text-align:center;margin-top:13px;color:#1565C0;font-size:13px}"
         "</style></head><body>"
-        "<div class='la'><img src='" + LOGO_MAIN + "' alt='Maxwell'>"
-        "<p>Maxwell Engineering Solutions</p></div>"
-        "<div class='box'><h2>Welcome Back!</h2><p class='sub'>Sign in to your account</p>"
+        "<div class='header'><img src='LOGO1' style='height:50px;object-fit:contain' alt='Maxwell'></div>"
+        "<div class='box'><h2>Employee Login</h2>"
         "<form method='POST'>"
-        "<label>Company Email</label>"
-        "<input type='email' name='email' placeholder='yourname@maxwells.in' required>"
+        "<label>Company Email</label><input type='email' name='email' placeholder='yourname@maxwells.in' required>"
         "<label>Password</label>"
         "<div class='pw-wrap'><input type='password' name='password' id='pw' placeholder='Enter password' required>"
         "<button type='button' class='eye-btn' onclick='var f=document.getElementById(&quot;pw&quot;);f.type=f.type===&quot;password&quot;?&quot;text&quot;:&quot;password&quot;'>&#128065;</button></div>"
         "<button type='submit' class='sbtn'>LOGIN</button></form>"
         + ("<p class='err'>" + err + "</p>" if err else "")
-        + "</div><a href='/'>&#8592; Back to Visitor Form</a>"
-        "</body></html>"
-    )
+        + "<a href='/'>Back to Visitor Form</a></div>"
+        "</body></html>").replace("LOGO1", LOGO_MAIN)
 
 @app.route("/employee-dashboard")
 def employee_dashboard():
@@ -1327,28 +1293,23 @@ def employee_dashboard():
     visitor_times = {str(v["id"]): v.get("created_at","") for v in visitors}
 
     return ("<!DOCTYPE html><html><head><meta charset=\'UTF-8\'><title>" + name + " Dashboard</title>"
-        "<style>*{box-sizing:border-box;margin:0;padding:0}"
-        "body{font-family:Segoe UI,Arial,sans-serif;background:#f0f4f8;padding-bottom:72px}"
-        ".header{background:#1565C0;color:white;padding:10px 16px;display:flex;align-items:center;"
-        "justify-content:space-between;position:sticky;top:0;z-index:100;box-shadow:0 2px 10px rgba(0,0,0,0.2)}"
-        ".hdr-logo{height:38px;object-fit:contain}"
-        ".header a{color:white;text-decoration:none;background:rgba(255,255,255,0.2);padding:6px 12px;"
-        "border-radius:20px;font-size:12px;font-weight:600;margin-left:6px}"
-        ".container{max-width:600px;margin:0 auto;padding:14px 12px}"
-        ".card{background:white;border-radius:16px;padding:16px;box-shadow:0 2px 12px rgba(0,0,0,0.08);margin-bottom:14px}"
-        ".card h3{color:#1565C0;margin-bottom:12px;font-size:15px}"
+        "<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial;background:#f0f4f8}"
+        ".header{background:#1565C0;color:white;padding:10px 20px;display:flex;align-items:center;justify-content:space-between}"
+        ".hdr-logo{height:48px;object-fit:contain}"
+        ".header a{color:white;text-decoration:none;background:rgba(255,255,255,0.2);padding:7px 13px;border-radius:5px;font-size:13px;margin-left:7px}"
+        ".container{max-width:900px;margin:20px auto;padding:0 15px}"
+        ".card{background:white;border-radius:9px;padding:18px;box-shadow:0 2px 8px rgba(0,0,0,0.07);margin-bottom:15px}"
+        ".card h3{color:#1565C0;margin-bottom:14px}"
         "table{width:100%;border-collapse:collapse}"
         "th{background:#1565C0;color:white;padding:10px;font-size:12px;text-align:left}"
         "td{padding:10px;border-bottom:1px solid #eee;font-size:13px;vertical-align:middle}"
-        ".badge{display:inline-block;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:700}"
+        ".badge{display:inline-block;padding:3px 9px;border-radius:11px;font-size:11px;font-weight:700}"
         ".badge.pending{background:#FFF8E1;color:#F57F17}.badge.approved{background:#E8F5E9;color:#2E7D32}"
         ".badge.rejected{background:#FFEBEE;color:#C62828}"
-        ".btn{padding:6px 12px;border:none;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;margin:2px}"
+        ".btn{padding:5px 11px;border:none;border-radius:5px;cursor:pointer;font-size:12px;font-weight:600;margin:2px}"
         ".ba{background:#2E7D32;color:white}.br{background:#C62828;color:white}"
-        ".notif-banner{background:#E3F2FD;border-left:4px solid #1565C0;border-radius:12px;"
-        "padding:12px 16px;margin-bottom:14px;display:none;font-weight:600;color:#1565C0;font-size:14px}"
-        ".force-banner{background:#FFF8E1;border-left:4px solid #F57F17;border-radius:12px;"
-        "padding:12px 16px;margin-bottom:14px;font-weight:600;color:#E65100;font-size:13px}"
+        ".notif-banner{background:#E3F2FD;border:2px solid #1565C0;border-radius:9px;padding:12px 18px;margin-bottom:15px;display:none;font-weight:700;color:#1565C0;font-size:14px}"
+        ".force-banner{background:#FFF8E1;border:2px solid #F57F17;border-radius:9px;padding:12px 18px;margin-bottom:15px;font-weight:700;color:#E65100;font-size:13px}"
         "</style></head><body>"
         "<div class=\'header\'>"
         "<img src=\'LOGO1\' class=\'hdr-logo\' alt=\'Maxwell\'>"
@@ -1418,7 +1379,6 @@ def employee_dashboard():
         "}catch(e){}}"
         "setInterval(checkNew,8000);checkNew();"
         "setInterval(checkOrderReveal,30000);checkOrderReveal();"
-        "<nav style='position:fixed;bottom:0;left:0;right:0;background:white;""display:flex;justify-content:space-around;padding:8px 0 10px;""box-shadow:0 -2px 15px rgba(0,0,0,0.1);z-index:100'>""<a href='/employee-dashboard' style='display:flex;flex-direction:column;align-items:center;""gap:3px;color:#1565C0;font-size:10px;font-weight:700;text-decoration:none;""background:#E3F2FD;padding:6px 16px;border-radius:12px'>""<span style='font-size:20px'>&#128100;</span>Visitors</a>""<a href='/change-password' style='display:flex;flex-direction:column;align-items:center;""gap:3px;color:#777;font-size:10px;font-weight:600;text-decoration:none;padding:6px 16px'>""<span style='font-size:20px'>&#128274;</span>Password</a>""<a href='/' style='display:flex;flex-direction:column;align-items:center;""gap:3px;color:#777;font-size:10px;font-weight:600;text-decoration:none;padding:6px 16px'>""<span style='font-size:20px'>&#128203;</span>Form</a>""<a href='/employee-logout' style='display:flex;flex-direction:column;align-items:center;""gap:3px;color:#777;font-size:10px;font-weight:600;text-decoration:none;padding:6px 16px'>""<span style='font-size:20px'>&#128682;</span>Logout</a>""</nav>"
         "</script></body></html>").replace("\'","\'").replace("LOGO1", LOGO_MAIN)
 
 @app.route("/change-password", methods=["GET","POST"])
@@ -1650,41 +1610,7 @@ def security_logout():
 
 @app.route("/manifest.json")
 def manifest():
-    return jsonify({
-        "name": "Maxwell Visitor Management",
-        "short_name": "Maxwell VM",
-        "start_url": "/",
-        "display": "standalone",
-        "background_color": "#1565C0",
-        "theme_color": "#1565C0",
-        "orientation": "portrait",
-        "icons": [
-            {"src": "/icon.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
-            {"src": "/icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
-        ],
-        "categories": ["business"]
-    })
-
-@app.route("/icon.png")
-def app_icon():
-    import base64 as b64
-    from flask import Response
-    img_data = b64.b64decode("/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1BST0ZJTEUAAQEAAAHIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAACRyWFlaAAABFAAAABRnWFlaAAABKAAAABRiWFlaAAABPAAAABR3dHB0AAABUAAAABRyVFJDAAABZAAAAChnVFJDAAABZAAAAChiVFJDAAABZAAAAChjcHJ0AAABjAAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAAgAAAAcAHMAUgBHAEJYWVogAAAAAAAAb6IAADj1AAADkFhZWiAAAAAAAABimQAAt4UAABjaWFlaIAAAAAAAACSgAAAPhAAAts9YWVogAAAAAAAA9tYAAQAAAADTLXBhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAACAAAAAcAEcAbwBvAGcAbABlACAASQBuAGMALgAgADIAMAAxADb/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHBw8LCwkMEQ8SEhEPERETFhwXExQaFRERGCEYGh0dHx8fExciJCIeJBweHx7/2wBDAQUFBQcGBw4ICA4eFBEUHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh7/wAARCABkAYYDASIAAhEBAxEB/8QAHAABAAMAAwEBAAAAAAAAAAAAAAYHCAMEBQIB/8QAWBAAAAUCAgMFEwoEAgYLAAAAAAECAwQFBhESBxMhCBQiIzIVMTY3QUJRUmFicXKBgpGSobKzFiQzQ1NUc3R1sZOiwcI0NRclJkRj0RgnVWSDlKPS0+Hi/8QAGgEBAAMBAQEAAAAAAAAAAAAAAAMEBQIGAf/EADgRAAEDAgQDBQcDAgcAAAAAAAEAAgMEEQUSITETQXFRYYGhwRQiMjM04fCR0fGCsQYVIyRCRFL/2gAMAwEAAhEDEQA/ANlgAAiAAAiAAAiAAAiAAAiAAAiAAAiAAAiAAAiAAAiAAAiAAAiAAAiAAAiAAAiAAAiAAAiAAAiAAAiAAAiAAAiAAAiDx65WWqYTTLbTkua/mJiMzhmXhzzxPYRF1TMewKsuxVXKm3LdlHrjlNfgrdYyEwh3O00kiSnh8nh6w9nbdwSxR53WUcjsoupkj5XuEbhnQ4//AHfB130uYp9wftOrj3NIqXV4HM6a5ipnI5rWZGHPyLwLb3DIjFd3TWr0odrUKTGuFypS6i5vheeE2nikM6xTRERdw9vPHUq121K5LpcKBI/1MiK69B4Cf8Uwyl3Pnwx68kekWRSOeM2ltdR3KIztaeau8B1IsonafHl/bNpX6SxAUTorK7YAAIgCL3pe1t2hHJys1BDbqy4EdHCcX4E/1MU/cG6GkreNq3aG2239W9NWalL8xPO9ItQUU8/wN0UMlRHHo4rRADKTmni/Sdw/1W33m9f/AND1qHuhLgadwq9HhzG/+BmaV/cLZwaqAuAD4qAV8K0uAgViaUbVu/VsRpZw56y/wcngL80+crybRPRmyRvjOV4sVba8OFwUAAHC6QAAEQAAEQAAEQAAEQAAEQAAEQAAEQAAEQAAEQAAEQAAEQAAEQAAEQAAEQAAEQAAEQAAEQQOvQGtbWbcnOb0hV/hxJJclLppJLiD77gksuzirsCeDqzY0WdEcjymm5DC+WhZZkmO2Pym65c3Mo/KtNqQdtG5KMyoZ4kWT6Xi9Xt7GwRe5rTpjVQpVFts24S225LRxGW82rafwJ15Z44lsTgXZUZCXfJaOXAj1OsxmMPoW6gvL6TxMvIY9KjUmBSWFNwmCbNZ5nFqWanFn2VKVwj8omExbqHfn4VwYweS7jCGmWm20YE2hJJT4C2AOYBWUqCltOGlhy3nuYFtOt80v96kmjOmN3hFzjX+37TrSzcqrUsSoVVoi31glmP+IvYR+TafkGX9HlBjVypTa3cLrnMamo33Unl8p7hcFrHsqMa2G0jHgzy/COXaVRq5nNtGzcr1tH+jm5dI0tyrTpLkaC45mfnvcJTy+uyF1fDzh83XNsu2avIolDtluoyIi1NLn1GUtSVKLYrBtGCcMeyPdtvTTOg1CsE9GyU1cVSKVEZb4MRSMdUXg7Y/AKgcXrXnHHfpHOGN2GOd8p42jRawH27FnPdGxgyG55lXvoAqUa765UYVXt6gkwxFSttDNOQjriLsCW6WLP0e0i3Xa9OtVo9WtKFnCcOOrhqwx4Ow/KIJuSOiqs/kU/EIWXukelLUvxGfiEMapBZXhjSQLjZX4bGmLiLnVUXWLDg1OnOV/R7U3KtEY4b8BfAlxPIXKLul/MJRog0yT4UuPRLulb5hL4puY59Iz459cXfGKktys1K36vHqtIkuR5THPUjr+9V2SFs7oawmoLSLwpEUm4kvLv1ptHBadPDBZJ7Cv38YalRGwlsE+od8J5g9n3VON5txY9CNxyWlyPEQzSXKvmLEhO2RBjTHM6t9Ify8nZhlxUXdEQ3NF5O1223KDPdN2dTCTq1L5S2Fcn1T2eDKLiHmZI3U0xa8XstdjxNHdp3WZ7g0w6SrfqPM2sUynQpWrJeRbPZ84ed/p9vj7Gk/wFf8xy7pKPvnS/Gi/bxGEelSiFYXBSpNDrEykzvp4j6ml+Trk9wenpaWlljY5zBci6x5ZZmPIDjYGy2PouukrusuFV8G98HxUpCOsdTyv6H5RLBmPct3RvG5JFuSXS3vUkZ2cft0f+4sfQQ04POV9N7PO5nLcdFrU0vFjDkEZ0i3IzaloT604besaRlYQvr3VbEF6fYRiTDNu6guR2pXFCtKDxm9MrryEde+vYkvNT745oqf2iYMO3PolRLwmF3NeSrT7fH2VK/gK/5jvUjTdpBqlRbplNo1KkynOC2hDC8y8E49v3FCrbpo7lv12RSZJ4vxMqF+NlI1e0zEm0BdOCheO78Fwenmo6VsJkawbXCyGTzF4aXW1Wg9HlT0lzqu4V30OnU6nahSm1smWfWZiwLDOrqYiwwAeRkeHuuAB0W4xuUWvdAABwukAABEAABEAABEAABEAABEAABEAABEAABEAABEFA7o2zqbSKQ7dkKTUGp8qclDiNfxfDSeOBdTnC/hU26o6Wjf6g17qxcoJHMqGWO5UFS0OiN1l7fkn71I/iKG27Hxdsaim519OYx/hkMPDcNgdAlC/TmPhkNjHm5WM6rPww+85Zu0+2xBsyu09ujyahq5bKnVoekKXlUSuoIbZMuV8sKN86c/xzHXq+0IWluuv8+oX5V33hU9j9GFG/UWPiELtES+iDnamxUFQMtRYbXC3QAAPHLeQAAEVAbrarOkxRaG0fL1ktzzcCR/eK/u5fMPRXb1Aa4tdWzVOd36OQ0XgwLEe9urDcLSBCw528U+8oR7Td/n1Gb+rbokTV+qPWUDAIYW9tz+fqsSpPvvd0CgID2qbbNXqdB5rQY2+WN9JiZEcpCl8nZ33OC9qC7bNySKI67rX2ENaxffG2Rq9p4DVbMwuyg6qkWOAzEaK0tyR0VVn8in4hCy90j0pql+Iz8QhWm5I6Kqz+RT8QhbemiizbisZ2iwGtY/KksILvC1hZlH3Elt8g8xWuDcRzHYELZpwXUth3rHimHdS3J1TmocWpDa8nBzFhmTj2dpekbgrFJjVy0HaRIIiYlRdV4nB4J+aeB+QRyqaNKRL0aN2cyRN6hslMScnCS/9p5TxxLsGJ1GQTTLbfaISkRYhXtqcpboWk+liuqWmMVw7nZZD0IVF23tLNPad4vXvqgvo8fZ7+BjYIxxUE6rTw5vX6u4uL/8wNjjvGAC9j+ZC5oNGub2FZj3QnTsp34Eb4hjtbqi2N7VaFdEVri5fzeV+Inkn5xe4OpugunXTvwYnxDF7aSbdauqyahRjIiccRmYPtXU7U+3Z5ROaj2f2d/K1j00UYj4vFb3rGFHqEmmVKHUo3FvxH0uo8YlEY29alYjXBbdPrUbDVy2Eu4Y8g+uT5p4l5Bhp5DrTzjTrWrcb4DiO0w60aD3Kdz62JNtOS4Wdj53F8Q9iy9OB+Uxbxun4kQlG7f7fyoMOlyvyHmrvnymYMJ+ZJcJthhCnXFdhJbTGa9DNMdvjS/Nuia180iPqm8P7VSj1SP7vME83T9z8y7Qbt+K586qy+M/ARhm9Y8C9I9/QJbjdu6OoeJfOaiW/Hz8dJZS9XD2jIh/29I6Tm/QdOavSf6swZybqs66bOmpcX5r+0h2NAXTgoXju/BcHX02dNS4vzX9pDsaAum/QvHd+C4PQn6H+n0WX/2fH1Wxh493VJ2kWtVas0226uFEdkJQs+CrIkzwP0D2B413Uxyr2vVaSy620ubEdjoWsuClS0mWJ+keMbbMM2y33XsbKjaNpS0s3W7/ALNW9CcbPr0RVZUeFa15R+XVcmnS3oXNKrNNRoZctbbEd1CMe2wxMiF2WJQW7ZtCnURs8+9Wci1p69Z7VH6TMd25IzU23KjEdLO29FcQrwGkxomshEvuxNy+Kq8B5Zq83WerY3QNwRpjbdwwYc2Kf0i2EapxHtyn7BoW36xArtIjVWmOa2LKRnbX/Q+wYwkNP7lF9buj2Y2fIbqK8ngNts/3xF/FaCGKISxi2uoVaiqXvdkfqmlO99I1ozJkuLb1KcoDa0IZlrxUrhYFw8HNnC2cnsCA/wDSFu//ALMoX8F3/wCQaLuOjwq/QZlGno1keU2aFlh7fTtGKbvt6dbVxzKLU/p2F8vrVo61ZeMQ5wtlLUtMcjBmHmvtW6aIhzXGx8lp/RPct+XLhOuGiUuDRn42sjyI5nncXsw2KWezDHqdQeXpdvq/bMqLkqNSKO5QsyW2JD2ZTi1mnnGROJ6uPUEJ3PWkqLQ4UigXDN1cFtCpER5fWYbVN+dzy7uPZHAZVzTdf/1kO24J+DVNn+7isPJ4CHBpBHUudKwCMdduVtdyu+PniAY67ipnozv7SXd86LJK26Umja/JKllmRlR12TM5tPyGOHSlpJ0g2ZWXUu0OlcynXzRBkLQtetT32VzYfkIXDR6bCpFNYptNjNx4rCMjbaOckhAd0bQl1jRvJdaPjKc4mX5hYkv+UzPyCnFNC+pF4wGnS2qleyRsRs43CrKDp6vedNjwotHozkh9aUNo1DvDUrYRfSC79H0y751HdfvOmQ6fN1x6lmKvHispbVcNW3HN1RiyOt1p5txp3VONrztr7TDaNvWJXW7ltCm1to8N9MpUsu1WWxafWIxdximZA1vDYADzUNDM6QnM7Ve06ttpo3HTJCE8JSh51Dr9Dret5j1eHUDZ+k1DyV5cezgIXuhrk+T+j6RHacwlVL5q34p8s/Rs8opHc6XJzD0hR4zrnzWrfNF+Oe1tXp2eUUqfD3TUzpgdtu/tU8lSGShnatTV9dSbostykNNOVEmVb2Q8eCFL6hGKHuPS5pPt6rt0mr29Ro8paEqbRkUvPmVgWGDg0UM026R6Qt0RJqRHrKdBe1xdrqmcEI9Y8D8pjrDmxnOZGgtAulSXDKGmxKu/R5MuqfQjk3dTo9OnG8rIyyewmspZcdp7ccRG9K2lamWY6dOjM80Ktkz6knMiWseTnP8AoJzcVSbpFBqNVcLFEOK4+fmJNWHsGG6tUJNTqUipTndY/LWp1xffHiYkwyibVyFzx7o5LirqDC0Abq3KPpI0u3nMfRbLUYtXwlojMtZUeE3Mf36g+Kdptvi36u7BuWDHm6heR9lbGqfRhyiI0cH+UWRuZIDUXRk1N+snSnXFq7OVWQvd9opXdDslH0s1ky+s1C//AEUi7CIJql1PwxYX66KtIZY4myhxutRWbclNuq349ZpbvEu7FIVym1dVCu6IHup+lm3+oNe6sQjcmVZxuu1WgG5xDjG+kJ75CiR+y0+gTfdT9LNv9Qa91Yoez+z17YxtcKzxeLTF3cssDcNgdAlC/TmPhkMPDcNgdAlC/TmPhkNLH/ls6lVsN+Iqjt1z0SUL8q57wqex+jajfqLHxCFsbrnokoX5Vz3hU9j9G1C/UWPiELeH/QDofVV6n6g9R6LdAAA8ct5AAARZ33W9Mc5o0KrJ+jWh2O55MFJ94/QIRpFSdYsO0rkb+ri8zJXeOsqPL6xGND6abXcurR/MgxWycnMZZEQuytHU84sxeUZt0bViE3vy0rlPCjVI8mdf+6P85DxY87Lzj7g9Nh02enaRuw+R/PJZFUwCU32d/fRWxuSk/wCzVa/Op90Vfugem1WfHa+CkXVufbbqdqsXBSqk2RYS0rYcTyHkZdi0dkhSu6CT/wBbVZ/8L4KQo3tfiL3N2I/ZfJmkUzQeR/dS7ckdFVZ/Ip+IQ0oM17kjoqrP5FPxCGklGMzF/q3eCu0PyQupzQhc0+ZO+G9+6nfGpx4WTNhm9I/alMag06ROknkYjtqdcPvUpxMZXfvuuTtOPN+jtSJC99b3YjI+ujkrDJh3xbfDtE03SWkFsmfkdSZPGL4VRWg+R1Ut7Pb5B9OFSiVkf/oXPd2r57W3K53Yq30XMuXLpfpbp8tdR3855ijcV+w2QKP3L9n7wpD92Tmy18/i4hdq11yvOMvQQvAfMVmbJPZuzdEooyyO53OqzHuhOnZTvwI3xDGnBmPdCdOynfgRviGNOD7XfIg6fslN8yTqsnbpC1zod9uVKO181q3zhHa63ry9PC88Q2wrgctW76dWm/qHOGjt2j2LL0GY1NputUrpsWYy00S50T51EwLhZkpPFPnJxL0DHg28LmFVTcN/LQ9Fn1cfBmzN6+Ks+pPOaWNNTTLWs3gt9KG+8it7VH3M20/CoarjNNMstttNk2hCCQhOHJSXUFNblu1t425IueQgikVJeRjvGkKwP1lF/KQusYOJStMgiZ8LNB6rRo2EMzu3dqsY6bOmpcX5r+0h2NAXTgoXju/BcHX02dNS4vzX9pDtaAum/QvHd+C4PSH6D+n0WUPqB19VsQRXSFelJsujc0Kk4a1ucBiOg+G6r+hdk+oJUMp7qCZJk6TSjOfQRIjSG0eHFale32Dy9BSipmDDtutipmMUeYL0pWn27p0vU0ihU9sl8FtGRbzm3wKLE/AQ956o6eZtNcku0yNGYcQrOhxDKVITtx2GeYtghu5hgxp2k3WyWyXvSE46xj23ARj6FmNRVj/Jpn4DnumL9e+GmlEccY8VWphJKzO5x8Fgsab3JnQHUP1JXw2xmQab3JnQHUP1JXw2xpY19L4hVKD5yuUVNuiLH+UduHW4KCOpUxClfisc9SfN2mXl7ItkZ40oXnWL8uluwbIdLei15JUlC+C723CL6pP83oHnqBkhmDmG1tSewLUqS3IQ7W6oYaz3O1SoU7RzGjUiO3Ffi8XOZ67W9ufZzf8A11BS2mPRk7Y7VPmwpDsyE+hLT7y+Uh/q7OoSup4DEc0a3hOsy6Y9Ri6xyLyJUf7VrrvL1S7o9FWRtxCmzQm/P7dVlwONNNaQbrbI68thmVEdjSGycZeQpC0H1yTLAyHFS5sWp05iowXUOxX0Z21p5ykmO6PIEEFbiwve1Ddt66qjRHf90fUhvv0dar0YH5Rdu5QuLWxKpa7jhHqD33F8Q9i/bl9Jjq7q+2sHaddEZvHP80l+00K/cvIQpq0LhqdtV6PWqa5x7ebxcppw4XpHr7DEKEdvqFhk+y1F+XorO0zu1K/dJkyiUcikR6FEc53bITi75ccEeEiFPMuOtPNutcW431/gGm9zPb+9bWfuedxk+rOK4a+VqiV2e+Vifd2CmNN1tfJbSBMjRkEiNK+dxkF2q1Hs80yMvIOaCpaJDSjZo/W26+1MLi0Tcz+BXzVr+ad0FOXY24W+X4m9y/MHxasPOxPwEPK3LVvbxtCRXnS46pvZUH/wm8U+Th5/QQoWjzqvV6bTrFiu8Q/UdahHburwRwu51fKNn0GmRqPR4lKht5I8VlLTZdwiGXXRCjiMQ/5m/gNlcp3md2c8h5qN6a3XGdFdwuNYf4XJ6VER/uMZjbukanOVexK5Tm29Y4/CcJtPZWSTNPtIhiNSRewFw4T287+irYlo5pVsaPZGmNu1YTdqNOcxuN1HEM/aHm5/C5+I6FyWLpUuGsOVesUSRJluZUrXxSOTsLYR9gXLuaJrUrRXGjN8uI+80vwmo1/3i0RUlxJ9PO4NY24JF7aqwykEkYu42We9z5Y11W1fLs6sUhyHEXBcazqWk+EakHhsPvRK91R0s2/1Br3Vi2RUu6n6Wjf6g17qxVZUuqaxkjt7hSPiEVO5o7FlkbhsDoEoX6cx8Mhh0bisDoEoX6cx8Mhqf4g+WzqVVw34nKjt1z0R0H8o57wqex+jajfqLHxCFsbrr/PqF+Vd94VPY/RhRv1Fj4hC3h/0I6H1Veq+o/T0W6AAB45byAAAiDPmn7RW649Iuu2oxumvhT4iC4XjoLq90vKNBgLFNUvppA9iilibK3K5ZV0VaYKnbLTdKrjblRpSOAhf10fwY88u4OzpAtj/AEg3TLuOzaxSqkcvLjEW8TUhGVJIwyLwx5ItPSHoftq6XHZscjpVSXynWUYoc8dH9SwFM3DoUvimvOb1jN1Jjt4q05vUPAxuQVFLI/ixuyP79vz9FnSRTMbkcMw81O9zjaFy21dFWcrlIkQm1xSQha8uVasxckyMWfpHlxWrQqEaTW4dGXKYU1vl9fISexSklzzPDHAhl75NaUYvzbmZczbfaI1uX2cEdqlaJ9IVce42kORu3emuZP34R+gcz0bJJeNJM0dP5K6incxmRjCueRdtvWhEXC0etuyJy0ZH61JRxmTqkyg+SXd547OhvRpNvOot1esNuNUZtedxa+VLV2CP9zFkWNoGo9NcRNuSXzVf5W928Usl4eqr2C42GmmWUNNNobQ3wUIRzkiOpxJkbSyn1J3cd13DSucQ6XlyX5GZajMtx2mkNtoRlQlBcFKS6gjGkW+6RY8SNJqjMt0pRqS2lhslbSw5+JlhzxLhxPMtOFxjaF+MQw2FocC4XC0HAkaLHmku9I11aQY1xxoLsdiO20jUuOcJeRRn1OdzxeNoabbeuCrw6SdNqMOXLeSy3nyKTmPZtMlf0Fob2i/dmvUICjRvuzXqEL89ZDNG1hjtlFhr9lWigexxdm37lzjJmkLR9JRpk+TkFriKs/viKrrW0rxzeROC/QNZj4y9fhwsBDSVbqVxc3mF3PA2YAFdWlwY1Mpsenwmybjx20tNo7CS2CC39pboFoVd2ky4VRky0NpXgy2nJwk4ltM/6CxxxOMNOFxraF+FAgjcwOu8XHVSuabWabLEF81pq4bvqFaajORm5b+fIvhqRzuqOTR3X2rWvSn152M5IbirXxKF5VLzNmjn+UbZ3tF+7NeoQb2i/dmvUIbP+ctMfC4elrb/AGWeaA58+bXp91BtHWlKh3xUXKbAiz40ptlTy0PoLKSSURc8j74hAd09Zc6dKjXbTWXJCGGNTLbRykJTiZL8G3A+xgQvlthpsuKbbR4EDlGZFVcGYSRC3durb4eIzI8rDliXNOtG44dagta1bGZDjK+StJp4RC7oemC5bvacpVqWM45LWjKt5crO2zj1VcFJfzC2X7WtqS6Tr1v0p1zlZ1xUZv2HqRY8eKyTEVlqO2jrG0ElPoIXarEIZyHmP3h3qGClfELZ9OiwfUIcqDMkQZTWrfYWppxHaLLYLo3N99UiiR/ktNRJKXUqjnYcbRmb4aUISR7cS2kNFHGj/YteoQFGj/YteoQ6qcWFRFw3s8+f6LmKiMT8wd5KiNNWl2A5Saja9vb430txUeVJWjIlCSPhJR1TNW0sfCO1uYZFrNw5EKDvh2vLbN6W8+zgnLmwIkK7G0vCLsOPG+7NeoQ+m2Wmy4ptCPAgVHVcfA4LGkd99/JTCF3EzuN/D7qD6Z69atKtVynXSiQ5HqSVNNoYbzqNRYHmLsGk8DGP3E/ZfRjfLjbbpcYhC/CPje0b7s16hCagxIUbSA29+/7LippeOb3ssy6ENK0e0abIolwNyXIOszxFsIzqax5ScOx1fDj2RpmG83KitSWtrbyErR4pliP3e0X7s16hDnFSrnZO/OxuUnfVTQxujblJuo1pIt9u6bKqlDMy1j7Jmz3ridqD9YiGObbosqu3JCokb6d99LPidsrzSx9A3WPHjW/QY1Q5oxqJTmp2Jq3yiMhLu3nnmwx6pizQ4i6lY5oF77dVFUUomcHdi7lMgx6bTY9Oitk3HjtpabT3pFgQqvdPW3zSslutRmy3xSnMXO6wvYr25D9IuAdeUwzKYdjyGm3WXEZVoWjMlST6hl1SFOCZ0MokG4U8kYewsOyzJuXqDzSvZytON8TSmMxfiuYkn2ZzGox51Ko9LpTS26ZTYcJC9q0MMpRm8OA9ES1tUaqUyWsOQXNPDwWZUGY9Nmiip06sSa/b0BybTn3FPOMM8uMo9quD1UeDnDTgDmlqn0z87EmhbM2zlinR9e9cseouSKbqzbc4D8Z/krwx5XXEaeyLTLdGuanoQ4z89wfRkF3z6DQ6k5rZ1Hp8pzt3oqFq9pBTqBQ6a5rafR6fGc7dqOhCvSRC9PiFNO7O+LXqqzKaaP3WyadFD9FN2XZdTsyVWrebpNOJCd6r253Fedzyw6uArrdFaQKHV6XItKE3J33Em8etxGRvgYkpJdU+f2BokcBxo/3Zr1CFOKoZHPxcm2wv/KsPic6PJm8lgYaw0MaQaHcVOhW5Faltz4FOTrNYhJJyIyoMyUR90hZO9ov3Zr1CH02w02XFNto8CBarcSZVsDXMtbv+yhp6QwOuHeSyZp6vWmXnXYTlHakNtxGFNLW+gkZ+F1NvOEGt+Y1TK9Tqk60443ElNvOIR3FEeUbp3rF+6t+oQ+TgwfuTH8NImhxdkUYjEenX7LiShL3582vReBo9vak3vTZE6kIkIQw7qnEvt5FErDESkcTLLTZcW2hHikOUYzy0uJaLBXmgga7oAAOV0gAAIgAAIgAAIgAAIgAAIgAAIgAAIgAAIgAAIgAAIgAAIgAAIgAAIgAAIgAAIgAAIgAAIgAAIgAAIgAAIgAAIgAAIgAAIgAAIgAAIv/Z")
-    return Response(img_data, mimetype="image/png")
-
-@app.route("/sw.js")
-def service_worker():
-    from flask import Response
-    sw = (
-        "const CACHE='maxwell-v1';"
-        "self.addEventListener('install',e=>{self.skipWaiting();});"
-        "self.addEventListener('activate',e=>{self.clients.claim();});"
-        "self.addEventListener('fetch',e=>{"
-        "if(e.request.method!=='GET')return;"
-        "e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)));"
-        "});"
-    )
-    return Response(sw, mimetype="application/javascript")
+    return jsonify({"name":"Maxwell Visitor Management","short_name":"Maxwell VM","start_url":"/","display":"standalone","background_color":"#1565C0","theme_color":"#1565C0"})
 
 init_db()
 
