@@ -38,6 +38,10 @@ app = Flask(__name__)
 app.secret_key = "maxwell2024secret"
 from datetime import timedelta
 app.permanent_session_lifetime = timedelta(days=30)
+
+@app.before_request
+def make_session_permanent():
+    session.permanent = True
 DB = "maxwell_visitors.db"
 
 SMTP_USERNAME     = os.environ.get("SMTP_USERNAME", "abc81a001@smtp-brevo.com")
@@ -1198,31 +1202,51 @@ def employee_login():
                 err = "Wrong password!"
         else:
             err = "Email not found."
-    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Employee Login</title>"
-        "<style>body{font-family:Arial;background:#f0f4f8}"
-        ".header{background:#1565C0;padding:10px 20px;display:flex;align-items:center;justify-content:center}"
-        ".box{max-width:400px;margin:60px auto;background:white;padding:38px;border-radius:13px;box-shadow:0 5px 18px rgba(0,0,0,0.1)}"
-        ".box h2{color:#1565C0;text-align:center;margin-bottom:22px}"
-        "label{display:block;font-size:13px;font-weight:600;color:#444;margin-bottom:5px;margin-top:14px}"
-        ".pw-wrap{position:relative}.pw-wrap input{padding-right:42px}"
-        ".eye-btn{position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:18px;color:#999}"
-        "input{width:100%;padding:11px;border:2px solid #e0e0e0;border-radius:7px;font-size:14px}"
-        "input:focus{outline:none;border-color:#1565C0}"
-        "button.sbtn{width:100%;margin-top:18px;padding:12px;background:#1565C0;color:white;border:none;border-radius:7px;font-size:15px;font-weight:700;cursor:pointer}"
-        ".err{color:red;font-size:13px;margin-top:8px;text-align:center}"
-        "a{display:block;text-align:center;margin-top:13px;color:#1565C0;font-size:13px}"
+    return (
+        "<!DOCTYPE html><html><head>"
+        "<meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>Maxwell - Login</title>"
+        "<style>"
+        "*{box-sizing:border-box;margin:0;padding:0}"
+        "body{font-family:Segoe UI,Arial,sans-serif;min-height:100vh;"
+        "background:linear-gradient(160deg,#1565C0,#0D47A1);"
+        "display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px}"
+        ".la{margin-bottom:24px;text-align:center}"
+        ".la img{height:60px;object-fit:contain}"
+        ".la p{color:rgba(255,255,255,0.75);font-size:13px;margin-top:6px}"
+        ".box{background:white;border-radius:24px;padding:32px 28px;width:100%;max-width:390px;"
+        "box-shadow:0 25px 50px rgba(0,0,0,0.25)}"
+        ".box h2{color:#1565C0;text-align:center;font-size:22px;font-weight:800;margin-bottom:4px}"
+        ".sub{color:#aaa;text-align:center;font-size:13px;margin-bottom:22px}"
+        "label{display:block;font-size:13px;font-weight:600;color:#555;margin-bottom:6px;margin-top:16px}"
+        ".pw-wrap{position:relative}.pw-wrap input{padding-right:44px}"
+        ".eye-btn{position:absolute;right:13px;top:50%;transform:translateY(-50%);"
+        "background:none;border:none;cursor:pointer;font-size:18px;color:#bbb}"
+        "input{width:100%;padding:13px 16px;border:2px solid #eee;border-radius:12px;"
+        "font-size:15px;outline:none;background:#fafafa;transition:border 0.2s}"
+        "input:focus{border-color:#1565C0;background:white}"
+        "button.sbtn{width:100%;margin-top:22px;padding:15px;"
+        "background:linear-gradient(135deg,#1565C0,#1976D2);"
+        "color:white;border:none;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer;"
+        "box-shadow:0 6px 20px rgba(21,101,192,0.35)}"
+        ".err{color:#e53935;font-size:13px;margin-top:10px;text-align:center;"
+        "background:#ffebee;padding:10px;border-radius:10px;font-weight:500}"
+        "a{display:block;text-align:center;margin-top:16px;color:rgba(255,255,255,0.8);font-size:13px;text-decoration:none}"
         "</style></head><body>"
-        "<div class='header'><img src='LOGO1' style='height:50px;object-fit:contain' alt='Maxwell'></div>"
-        "<div class='box'><h2>Employee Login</h2>"
+        "<div class='la'><img src='" + LOGO_MAIN + "' alt='Maxwell'>"
+        "<p>Maxwell Engineering Solutions</p></div>"
+        "<div class='box'><h2>Welcome Back!</h2><p class='sub'>Sign in to your account</p>"
         "<form method='POST'>"
-        "<label>Company Email</label><input type='email' name='email' placeholder='yourname@maxwells.in' required>"
+        "<label>Company Email</label>"
+        "<input type='email' name='email' placeholder='yourname@maxwells.in' required>"
         "<label>Password</label>"
         "<div class='pw-wrap'><input type='password' name='password' id='pw' placeholder='Enter password' required>"
         "<button type='button' class='eye-btn' onclick='var f=document.getElementById(&quot;pw&quot;);f.type=f.type===&quot;password&quot;?&quot;text&quot;:&quot;password&quot;'>&#128065;</button></div>"
         "<button type='submit' class='sbtn'>LOGIN</button></form>"
         + ("<p class='err'>" + err + "</p>" if err else "")
-        + "<a href='/'>Back to Visitor Form</a></div>"
-        "</body></html>").replace("LOGO1", LOGO_MAIN)
+        + "</div><a href='/'>&#8592; Back to Visitor Form</a>"
+        "</body></html>"
+    )
 
 @app.route("/employee-dashboard")
 def employee_dashboard():
@@ -1303,23 +1327,28 @@ def employee_dashboard():
     visitor_times = {str(v["id"]): v.get("created_at","") for v in visitors}
 
     return ("<!DOCTYPE html><html><head><meta charset=\'UTF-8\'><title>" + name + " Dashboard</title>"
-        "<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial;background:#f0f4f8}"
-        ".header{background:#1565C0;color:white;padding:10px 20px;display:flex;align-items:center;justify-content:space-between}"
-        ".hdr-logo{height:48px;object-fit:contain}"
-        ".header a{color:white;text-decoration:none;background:rgba(255,255,255,0.2);padding:7px 13px;border-radius:5px;font-size:13px;margin-left:7px}"
-        ".container{max-width:900px;margin:20px auto;padding:0 15px}"
-        ".card{background:white;border-radius:9px;padding:18px;box-shadow:0 2px 8px rgba(0,0,0,0.07);margin-bottom:15px}"
-        ".card h3{color:#1565C0;margin-bottom:14px}"
+        "<style>*{box-sizing:border-box;margin:0;padding:0}"
+        "body{font-family:Segoe UI,Arial,sans-serif;background:#f0f4f8;padding-bottom:72px}"
+        ".header{background:#1565C0;color:white;padding:10px 16px;display:flex;align-items:center;"
+        "justify-content:space-between;position:sticky;top:0;z-index:100;box-shadow:0 2px 10px rgba(0,0,0,0.2)}"
+        ".hdr-logo{height:38px;object-fit:contain}"
+        ".header a{color:white;text-decoration:none;background:rgba(255,255,255,0.2);padding:6px 12px;"
+        "border-radius:20px;font-size:12px;font-weight:600;margin-left:6px}"
+        ".container{max-width:600px;margin:0 auto;padding:14px 12px}"
+        ".card{background:white;border-radius:16px;padding:16px;box-shadow:0 2px 12px rgba(0,0,0,0.08);margin-bottom:14px}"
+        ".card h3{color:#1565C0;margin-bottom:12px;font-size:15px}"
         "table{width:100%;border-collapse:collapse}"
         "th{background:#1565C0;color:white;padding:10px;font-size:12px;text-align:left}"
         "td{padding:10px;border-bottom:1px solid #eee;font-size:13px;vertical-align:middle}"
-        ".badge{display:inline-block;padding:3px 9px;border-radius:11px;font-size:11px;font-weight:700}"
+        ".badge{display:inline-block;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:700}"
         ".badge.pending{background:#FFF8E1;color:#F57F17}.badge.approved{background:#E8F5E9;color:#2E7D32}"
         ".badge.rejected{background:#FFEBEE;color:#C62828}"
-        ".btn{padding:5px 11px;border:none;border-radius:5px;cursor:pointer;font-size:12px;font-weight:600;margin:2px}"
+        ".btn{padding:6px 12px;border:none;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;margin:2px}"
         ".ba{background:#2E7D32;color:white}.br{background:#C62828;color:white}"
-        ".notif-banner{background:#E3F2FD;border:2px solid #1565C0;border-radius:9px;padding:12px 18px;margin-bottom:15px;display:none;font-weight:700;color:#1565C0;font-size:14px}"
-        ".force-banner{background:#FFF8E1;border:2px solid #F57F17;border-radius:9px;padding:12px 18px;margin-bottom:15px;font-weight:700;color:#E65100;font-size:13px}"
+        ".notif-banner{background:#E3F2FD;border-left:4px solid #1565C0;border-radius:12px;"
+        "padding:12px 16px;margin-bottom:14px;display:none;font-weight:600;color:#1565C0;font-size:14px}"
+        ".force-banner{background:#FFF8E1;border-left:4px solid #F57F17;border-radius:12px;"
+        "padding:12px 16px;margin-bottom:14px;font-weight:600;color:#E65100;font-size:13px}"
         "</style></head><body>"
         "<div class=\'header\'>"
         "<img src=\'LOGO1\' class=\'hdr-logo\' alt=\'Maxwell\'>"
@@ -1389,6 +1418,7 @@ def employee_dashboard():
         "}catch(e){}}"
         "setInterval(checkNew,8000);checkNew();"
         "setInterval(checkOrderReveal,30000);checkOrderReveal();"
+        "<nav style='position:fixed;bottom:0;left:0;right:0;background:white;""display:flex;justify-content:space-around;padding:8px 0 10px;""box-shadow:0 -2px 15px rgba(0,0,0,0.1);z-index:100'>""<a href='/employee-dashboard' style='display:flex;flex-direction:column;align-items:center;""gap:3px;color:#1565C0;font-size:10px;font-weight:700;text-decoration:none;""background:#E3F2FD;padding:6px 16px;border-radius:12px'>""<span style='font-size:20px'>&#128100;</span>Visitors</a>""<a href='/change-password' style='display:flex;flex-direction:column;align-items:center;""gap:3px;color:#777;font-size:10px;font-weight:600;text-decoration:none;padding:6px 16px'>""<span style='font-size:20px'>&#128274;</span>Password</a>""<a href='/' style='display:flex;flex-direction:column;align-items:center;""gap:3px;color:#777;font-size:10px;font-weight:600;text-decoration:none;padding:6px 16px'>""<span style='font-size:20px'>&#128203;</span>Form</a>""<a href='/employee-logout' style='display:flex;flex-direction:column;align-items:center;""gap:3px;color:#777;font-size:10px;font-weight:600;text-decoration:none;padding:6px 16px'>""<span style='font-size:20px'>&#128682;</span>Logout</a>""</nav>"
         "</script></body></html>").replace("\'","\'").replace("LOGO1", LOGO_MAIN)
 
 @app.route("/change-password", methods=["GET","POST"])
