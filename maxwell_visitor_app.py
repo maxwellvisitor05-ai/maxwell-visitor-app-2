@@ -1023,6 +1023,14 @@ def pantry():
         if o["status"] == "pending":
             ab = '<button class="btn ba" onclick="deliverOrder('+str(o["id"])+')">&#10003; Delivered</button>'
             timer_html = '<div id="tmr-'+str(o["id"])+'" style="font-size:12px;font-weight:600;margin-top:4px"></div>'
+            guj_map = {"Water":"પાણી","Tea":"ચા","Coffee":"કોફી","Green Tea":"ગ્રીન ટી","Black Coffee":"બ્લેક કોફી","Juice":"જ્યૂસ","Other":"ઓર્ડર"}
+        qty_map = {"1":"એક","2":"બે","3":"ત્રણ","4":"ચાર","5":"પાંચ","6":"છ","7":"સાત","8":"આઠ","9":"નવ","10":"દસ"}
+        guj_drink = guj_map.get(str(o.get("drink","")), str(o.get("drink","")))
+        guj_qty = qty_map.get(str(o.get("quantity","1")), str(o.get("quantity","1")))
+        guj_text = str(o.get("visitor_name","")) + " માટે " + guj_qty + " " + guj_drink + " લઈ જાઓ"
+        if o.get("snacks"): guj_text += " | નાસ્તો: " + str(o.get("snacks",""))
+        if o.get("note"): guj_text += " | " + str(o.get("note",""))
+        timer_html = '<div style="background:#E3F2FD;padding:8px 12px;border-radius:6px;font-size:14px;font-weight:600;color:#1565C0;margin-bottom:4px">&#128203; ' + guj_text + '</div>' + timer_html
         drink_info = str(o.get("drink","") or "-")
         qty = str(o.get("quantity",""))
         snacks_info = str(o.get("snacks","")) if o.get("snacks") else "-"
