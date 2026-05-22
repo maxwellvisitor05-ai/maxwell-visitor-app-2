@@ -36,6 +36,8 @@ except:
 
 app = Flask(__name__)
 app.secret_key = "maxwell2024secret"
+from datetime import timedelta
+app.permanent_session_lifetime = timedelta(days=30)
 DB = "maxwell_visitors.db"
 
 SMTP_USERNAME     = os.environ.get("SMTP_USERNAME", "abc81a001@smtp-brevo.com")
