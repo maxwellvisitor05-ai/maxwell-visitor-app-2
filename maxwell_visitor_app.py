@@ -1261,12 +1261,9 @@ def employee_login():
         "<div class='pw-wrap'><input type='password' name='password' id='pw' placeholder='Enter password' required>"
         "<button type='button' class='eye-btn' onclick='var f=document.getElementById(&quot;pw&quot;);f.type=f.type===&quot;password&quot;?&quot;text&quot;:&quot;password&quot;'>&#128065;</button></div>"
         "<button type='submit' class='sbtn'>LOGIN</button></form>"
-<a href="#" 
-onclick="alert('Please contact Admin to reset your password')"
-style="display:block;text-align:center;margin-top:14px;
-color:#1565C0;font-weight:600;text-decoration:none;">
-Forgot Password?
-</a>
++"<a href='#' onclick='alert(\"Please contact Admin to reset your password\")' style='display:block;text-align:center;margin-top:14px;color:#1565C0;font-weight:600;text-decoration:none;'>Forgot Password?</a>"
+
+
 
         + ("<p class='err'>" + err + "</p>" if err else "")
         + "</div><a href='/'>&#8592; Back to Visitor Form</a>"
