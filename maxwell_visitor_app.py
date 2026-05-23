@@ -4,6 +4,7 @@
 from flask import Flask, request, jsonify, redirect, session, send_file
 import sqlite3, base64, io, os, hashlib, time
 from datetime import datetime, timezone, timedelta
+from flask_session import Session
 
 try:
     import psycopg2
