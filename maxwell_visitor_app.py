@@ -35,6 +35,9 @@ except:
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'maxwell2024secret@maxwell@fixed@key')
 app.permanent_session_lifetime = timedelta(days=30)
+app.config['SESSION_TYPE'] = 'filesystem'
+app.config['SESSION_FILE_DIR'] = '/tmp/flask_sessions'
+Session(app)
 
 @app.before_request
 def make_session_permanent():
