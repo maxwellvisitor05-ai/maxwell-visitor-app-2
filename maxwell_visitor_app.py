@@ -1273,7 +1273,7 @@ def employee_login():
 def employee_dashboard():
     if not session.get("emp_name"): return redirect("/employee-login")
     name = session["emp_name"]
-session.permanent = True
+    session.permanent = True
 
     conn = get_db()
     
