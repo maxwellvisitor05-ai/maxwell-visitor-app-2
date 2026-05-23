@@ -1,0 +1,7 @@
+Flask
+Flask-Session
+gunicorn
+qrcode
+openpyxl
+APScheduler
+Pillow
