@@ -1863,7 +1863,7 @@ def manifest():
         "display": "standalone",
         "background_color": "#1565C0",
         "theme_color": "#1565C0",
-        "icons": [{"src": "/icon.png", "sizes": "192x192", "type": "image/png"}]
+        "icons": [{"src": "/icon.png", "sizes": "192x192", "type": "image/png"}, {"src": "/icon.png", "sizes": "512x512", "type": "image/png"}]
     })
 
 @app.route("/sw.js")
@@ -1881,10 +1881,14 @@ def service_worker():
 @app.route("/icon.png")
 def app_icon():
     from flask import Response
-    import base64 as b64
+    import base64 as b64, io
+    from PIL import Image
     data = LOGO_MAIN.split(",")[1]
-    img_data = b64.b64decode(data)
-    return Response(img_data, mimetype="image/png")
+    img = Image.open(io.BytesIO(b64.b64decode(data))).convert("RGBA")
+    img = img.resize((192,192), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return Response(buf.getvalue(), mimetype="image/png")
 
 init_db()
 
