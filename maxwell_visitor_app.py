@@ -1884,7 +1884,7 @@ def app_icon():
     import base64 as b64, io
     from PIL import Image, ImageOps
     data = LOGO_MAIN.split(",")[1]
-   img = Image.open(io.BytesIO(b64.b64decode(data))).convert("RGBA")
+    img = Image.open(io.BytesIO(b64.b64decode(data))).convert("RGBA")
     img = ImageOps.fit(img, (192,192), Image.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
