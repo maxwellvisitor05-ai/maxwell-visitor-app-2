@@ -1888,8 +1888,8 @@ def app_icon():
     img = img.resize((192,192), Image.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
+    buf.seek(0)
     return Response(buf.getvalue(), mimetype="image/png")
-
 init_db()
 
 if __name__ == "__main__":
