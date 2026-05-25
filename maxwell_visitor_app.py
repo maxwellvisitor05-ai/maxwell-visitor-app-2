@@ -132,8 +132,7 @@ BEEP_JS = (
     "catch(e){}}"
     "var _soundEnabled=false;"
     "function _enableSound(){"
-    "try{if(!_audioCtx){_audioCtx=new(window.AudioContext||window.webkitAudioContext)();}"
-    "if(_audioCtx&&_audioCtx.state==='suspended'){_audioCtx.resume();}"
+    "if(_audioCtx)_audioCtx.resume();"
     "_soundEnabled=true;"
     "var b=document.getElementById('snd-btn');if(b)b.style.display='none';"
     "var ok=document.getElementById('snd-ok');"
@@ -306,15 +305,6 @@ def build_visitor_form(prefill):
     html = """<!DOCTYPE html><html lang="en"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Maxwell - Visitor Management</title>
-<script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
-<script>
-  window.OneSignalDeferred = window.OneSignalDeferred || [];
-  OneSignalDeferred.push(async function(OneSignal) {
-    await OneSignal.init({
-      appId: "178ecef1-8423-4186-90cf-653b8301126c",
-    });
-  });
-</script>
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#1565C0">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -850,7 +840,7 @@ def admin():
         '<a href="/admin-logout">Logout</a>'
         '</div></div>')
 
-    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Maxwell Admin</title><script src='https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js' defer></script><script>window.OneSignalDeferred=window.OneSignalDeferred||[];OneSignalDeferred.push(async function(OneSignal){await OneSignal.init({appId:'178ecef1-8423-4186-90cf-653b8301126c'});});</script>"
+    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Maxwell Admin</title>"
             "<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial;background:#f0f4f8}"
             + HEADER_CSS +
             ".header h1{display:none}"
@@ -1211,7 +1201,7 @@ def pantry():
         '<div class="hdr-logo-wrap"><img src="' + LOGO_MAIN + '" class="hdr-logo" alt="Maxwell"></div>'
         '<div class="hdr-nav"><a href="/admin">Admin</a><a href="/pantry-logout">Logout</a></div></div>')
 
-    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Pantry Dashboard</title><script src='https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js' defer></script><script>window.OneSignalDeferred=window.OneSignalDeferred||[];OneSignalDeferred.push(async function(OneSignal){await OneSignal.init({appId:'178ecef1-8423-4186-90cf-653b8301126c'});});</script>"
+    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Pantry Dashboard</title>"
             "<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial;background:#f0f4f8}"
             + HEADER_CSS +
             ".container{max-width:1050px;margin:20px auto;padding:0 15px}"
@@ -1508,15 +1498,6 @@ def employee_dashboard():
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>""" + name + """ · Maxwell</title>
-<script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
-<script>
-  window.OneSignalDeferred = window.OneSignalDeferred || [];
-  OneSignalDeferred.push(async function(OneSignal) {
-    await OneSignal.init({
-      appId: "178ecef1-8423-4186-90cf-653b8301126c",
-    });
-  });
-</script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;background:#F2F4F7;min-height:100vh;padding-bottom:90px;color:#1A1A2E}
@@ -1700,9 +1681,7 @@ function openProfile(){document.getElementById('profile-modal').classList.add('o
 function closeProfile(){document.getElementById('profile-modal').classList.remove('open');_newPhotoData=null;}
 function handlePhotoChange(input){if(!input.files||!input.files[0])return;var reader=new FileReader();reader.onload=function(e){_newPhotoData=e.target.result;document.getElementById('modal-profile-img').src=_newPhotoData;document.getElementById('hdr-profile-img').src=_newPhotoData;};reader.readAsDataURL(input.files[0]);}
 async function saveProfile(){var name=document.getElementById('p-name').value.trim();var dept=document.getElementById('p-dept').value.trim();var desig=document.getElementById('p-desig').value.trim();var payload={name:name,department:dept,designation:desig};if(_newPhotoData)payload.photo=_newPhotoData;var r=await fetch('/api/profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});var d=await r.json();if(d.success){showNotif('&#10003; Profile saved!',4000);closeProfile();}else{alert('Error saving profile!');}}
-async function checkNew(){try{var r0=await fetch('/api/latest-pending?host='+encodeURIComponent('""" + name + """'));var d0=await r0.json();if(_hwr&&d0.visitor&&d0.visitor.id>_lv){_beep(4);addNotifCount();showNotif('&#128276; New visitor: '+d0.visitor.name,15000);
-if(Notification.permission==='granted'){var n=new Notification('Maxwell - New Visitor',{body:d0.visitor.name+' aavya che!',icon:'/icon.png',vibrate:[300,100,300]});setTimeout(function(){n.close();},8000);}
-}if(d0.visitor)_lv=d0.visitor.id;_hwr=true;var r1=await fetch('/api/pending-count');var d1=await r1.json();document.title=d1.count>0?'('+d1.count+') Pending · """ + name + """':'""" + name + """ · Maxwell';}catch(e){}}
+async function checkNew(){try{var r0=await fetch('/api/latest-pending?host='+encodeURIComponent('""" + name + """'));var d0=await r0.json();if(_hwr&&d0.visitor&&d0.visitor.id>_lv){_beep(4);addNotifCount();showNotif('&#128276; New visitor: '+d0.visitor.name,15000);}if(d0.visitor)_lv=d0.visitor.id;_hwr=true;var r1=await fetch('/api/pending-count');var d1=await r1.json();document.title=d1.count>0?'('+d1.count+') Pending · """ + name + """':'""" + name + """ · Maxwell';}catch(e){}}
 if(Notification.permission==='default')Notification.requestPermission();
 setInterval(checkNew,8000);checkNew();
 setInterval(checkOrderReveal,15000);checkOrderReveal();
@@ -1837,7 +1816,7 @@ def security_dashboard():
         '<div class="hdr-logo-wrap"><img src="' + LOGO_MAIN + '" class="hdr-logo" alt="Maxwell"></div>'
         '<div class="hdr-nav"><a href="/">Visitor Form</a><a href="/security-logout">Logout</a></div></div>')
 
-    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Security Dashboard</title><script src='https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js' defer></script><script>window.OneSignalDeferred=window.OneSignalDeferred||[];OneSignalDeferred.push(async function(OneSignal){await OneSignal.init({appId:'178ecef1-8423-4186-90cf-653b8301126c'});});</script>"
+    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Security Dashboard</title>"
             "<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial;background:#f0f4f8}"
             + HEADER_CSS +
             ".container{max-width:1100px;margin:20px auto;padding:0 15px}"
@@ -1892,10 +1871,7 @@ def manifest():
         "theme_color": "#1565C0",
         "icons": [{"src": "/icon.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"}]
     })
-@app.route("/OneSignalSDKWorker.js")
-def onesignal_sw():
-    from flask import send_file
-    return send_file("OneSignalSDKWorker.js", mimetype="application/javascript")
+
 @app.route("/sw.js")
 def service_worker():
     from flask import Response
