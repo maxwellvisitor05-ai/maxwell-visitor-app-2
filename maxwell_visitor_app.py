@@ -1425,8 +1425,12 @@ def employee_dashboard():
                 <div class="order-block" style="margin-top:10px">
                     <div class="order-block-title">&#127839; Snacks (Optional)</div>
                     <input type="text" id="snk-{vid}" placeholder="e.g. Biscuits, Namkeen..." class="snacks-input">
+               </div>
+                <div class="order-block" style="margin-top:10px">
+                    <div class="order-block-title">&#128221; Note (Optional)</div>
+                    <input type="text" id="nte-{vid}" placeholder="Any special note..." class="snacks-input">
                 </div>
-                <button class="confirm-order-btn" onclick="confirmOrder('{vid}','{vname}','{person}')">&#10003; Confirm Order</button>
+                <button class="confirm-order-btn" onclick="confirmOrder('{vid}','{vname}','{person}',document.getElementById('nte-'+'{vid}').value)">&#10003; Confirm Order</button>
             </div>
             <div id="timer-lbl-{vid}" class="timer-label"></div>
         </div>""".format(
@@ -1878,7 +1882,7 @@ def service_worker():
 def app_icon():
     from flask import Response
     import base64 as b64
-    img_data = b64.b64decode("/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoH")
+    img_data = b64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAYAAABS3GwH")
     return Response(img_data, mimetype="image/png")
 
 init_db()
