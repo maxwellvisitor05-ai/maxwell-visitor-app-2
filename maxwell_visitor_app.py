@@ -1859,7 +1859,7 @@ def manifest():
         "display": "standalone",
         "background_color": "#1565C0",
         "theme_color": "#1565C0",
-        "icons": [{"src": "/icon.png", "sizes": "192x192", "type": "image/png"}]
+        "icons": [{"src": "/icon.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"}]
     })
 
 @app.route("/sw.js")
