@@ -1257,7 +1257,7 @@ def pantry():
             "if(gv)u.voice=gv;window.speechSynthesis.speak(u);}"
             "async function checkOrders(){try{"
             "var r=await fetch('/api/pantry-pending');var d=await r.json();"
-            "if(_pc>0&&d.count>_pc){_beep(5);if(navigator.vibrate)navigator.vibrate([300,100,300,100,300]);document.body.style.background='#FFF3E0';setTimeout(function(){document.body.style.background='#f0f4f8';},1000);"
+            "if(_pc>0&&d.count>_pc){_enableSound();_beep(5);if(navigator.vibrate)navigator.vibrate([300,100,300,100,300]);document.body.style.background='#FFF3E0';setTimeout(function(){document.body.style.background='#f0f4f8';},1000);"
             "document.getElementById('notif-banner').style.display='block';"
             "setTimeout(function(){document.getElementById('notif-banner').style.display='none';},10000);"
             "location.reload();}"
