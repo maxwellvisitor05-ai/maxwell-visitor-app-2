@@ -922,7 +922,7 @@ def admin():
             "var snacks=document.getElementById('asnk-'+vid).value;"
             "if(!drink&&!snacks){alert('Please select drink or enter snacks!');return;}"
             "var r=await fetch('/api/beverage',{method:'POST',headers:{'Content-Type':'application/json'},"
-            "body:JSON.stringify({visitor_id:vid,visitor_name:vname,person_to_meet:person,drink:drink,quantity:qty,snacks:snacks})});"
+            "body:JSON.stringify({visitor_id:vid,visitor_name:vname,person_to_meet:person,drink:drink,quantity:qty,snacks:snacks,note:note})});"
             "var d=await r.json();if(d.success){showNotif('&#10003; Order sent to Pantry!',5000);}}"
             "function parseIST(s){if(!s)return new Date();var p=s.split(' ');var dp=p[0].split('-');var tp=(p[1]||'0:0').split(':');return new Date(parseInt(dp[2]),parseInt(dp[1])-1,parseInt(dp[0]),parseInt(tp[0]),parseInt(tp[1]));}"
             "function checkAdminOrders(){"
@@ -1257,7 +1257,7 @@ def pantry():
             "if(gv)u.voice=gv;window.speechSynthesis.speak(u);}"
             "async function checkOrders(){try{"
             "var r=await fetch('/api/pantry-pending');var d=await r.json();"
-            "if(_pc>0&&d.count>_pc){_beep(5);"
+            "if(_pc>0&&d.count>_pc){_beep(5);if(navigator.vibrate)navigator.vibrate([300,100,300,100,300]);document.body.style.background='#FFF3E0';setTimeout(function(){document.body.style.background='#f0f4f8';},1000);"
             "document.getElementById('notif-banner').style.display='block';"
             "setTimeout(function(){document.getElementById('notif-banner').style.display='none';},10000);"
             "location.reload();}"
@@ -1430,6 +1430,10 @@ def employee_dashboard():
                 <div class="order-block" style="margin-top:10px">
                     <div class="order-block-title">&#127839; Snacks (Optional)</div>
                     <input type="text" id="snk-{vid}" placeholder="e.g. Biscuits, Namkeen..." class="snacks-input">
+                </div>
+                <div class="order-block" style="margin-top:10px">
+                    <div class="order-block-title">&#128221; Note (Optional)</div>
+                    <input type="text" id="nte-{vid}" placeholder="e.g. 3 with sugar, 1 without sugar..." class="snacks-input">
                 </div>
                 <button class="confirm-order-btn" onclick="confirmOrder('{vid}','{vname}','{person}')">&#10003; Confirm Order</button>
             </div>
@@ -1666,7 +1670,7 @@ document.getElementById('greeting-txt').textContent=h<12?'Good Morning,':h<17?'G
 function changeQty(vid,delta){if(!_qty[vid])_qty[vid]=1;_qty[vid]=Math.max(1,_qty[vid]+delta);document.getElementById('qty-'+vid).textContent=_qty[vid];}
 function parseIST(s){if(!s)return new Date();var p=s.split(' ');var dp=p[0].split('-');var tp=(p[1]||'0:0').split(':');return new Date(parseInt(dp[2]),parseInt(dp[1])-1,parseInt(dp[0]),parseInt(tp[0]),parseInt(tp[1]));}
 function checkOrderReveal(){var now=new Date();Object.keys(_vt).forEach(function(vid){var ot=parseIST(_vt[vid]);var diff=Math.floor((now-ot)/60000);var lbl=document.getElementById('timer-lbl-'+vid);var sec=document.getElementById('order-'+vid);if(sec){if(diff>=7){sec.style.display='block';if(lbl)lbl.textContent='';}else{sec.style.display='none';if(lbl)lbl.textContent='Order in '+(7-diff)+' min';}}if(diff>=20&&!_reminded[vid]){_reminded[vid]=true;_beep(4);showNotif('&#9749; Please order tea/coffee for your guest!',15000);}});}
-async function confirmOrder(vid,vname,person){var drink=document.getElementById('drk-'+vid).value;var qty=_qty[vid]||1;var snacks=document.getElementById('snk-'+vid).value;if(!drink&&!snacks){alert('Please select drink or enter snacks!');return;}var r=await fetch('/api/beverage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({visitor_id:vid,visitor_name:vname,person_to_meet:person,drink:drink,quantity:qty,snacks:snacks})});var d=await r.json();if(d.success){showNotif('&#10003; Order sent to Pantry!',5000);}}
+async function confirmOrder(vid,vname,person){var drink=document.getElementById('drk-'+vid).value;var qty=_qty[vid]||1;var snacks=document.getElementById('snk-'+vid).value;var noteEl=document.getElementById('nte-'+vid);var note=noteEl?noteEl.value:'';if(!drink&&!snacks){alert('Please select drink or enter snacks!');return;}var r=await fetch('/api/beverage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({visitor_id:vid,visitor_name:vname,person_to_meet:person,drink:drink,quantity:qty,snacks:snacks,note:note})});var d=await r.json();if(d.success){showNotif('&#10003; Order sent to Pantry!',5000);_beep(2);}
 async function act(id,action){if(!confirm(action+' this visitor?'))return;await fetch('/action/'+id+'/'+action,{headers:{'Accept':'application/json'}});if(action==='approve'){window.open('/pass/'+id);}location.reload();}
 async function checkout(id){if(!confirm('Checkout this visitor?'))return;await fetch('/api/checkout/'+id,{method:'POST'});location.reload();}
 function showNotif(msg,dur){var b=document.getElementById('notif-banner');b.innerHTML=msg;b.style.display='block';setTimeout(function(){b.style.display='none';},dur||8000);}
