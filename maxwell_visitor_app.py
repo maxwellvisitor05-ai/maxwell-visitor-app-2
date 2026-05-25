@@ -1880,10 +1880,8 @@ def service_worker():
 
 @app.route("/icon.png")
 def app_icon():
-    from flask import Response
-    import base64 as b64
-    img_data = b64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAYAAABS3GwHAABrzUlEQVR42u39d7xk53HfCX+f54RON8wMJmECJiEDBAaZSEQkKeboNZMoURIl0yst15L3fW0F78eW7bW9r7SWKelVXmlNipQlkRKDCJEEQCIRg5wzJmNyuKnTCU/tHyf0Od2nAABrzUlEQVR42u39d7xk53HfCX+f54RON8wMJmECJiEDBAaZSEQkKeboNZMoURIl0yst15L3fW0F78eW7bW9r7SWKelVXmlNipQlkRKDCJEEQCIRg5wzJmNyuKnTCU/tHyf0Od2n")
-    return Response(img_data, mimetype="image/png")
+    from flask import redirect
+    return redirect(LOGO_MAIN)
 
 init_db()
 
