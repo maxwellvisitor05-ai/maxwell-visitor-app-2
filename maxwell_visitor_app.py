@@ -1892,7 +1892,10 @@ def manifest():
         "theme_color": "#1565C0",
         "icons": [{"src": "/icon.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"}]
     })
-
+@app.route("/OneSignalSDKWorker.js")
+def onesignal_sw():
+    from flask import send_file
+    return send_file("OneSignalSDKWorker.js", mimetype="application/javascript")
 @app.route("/sw.js")
 def service_worker():
     from flask import Response
