@@ -720,7 +720,7 @@ def admin():
         "SELECT * FROM visitors WHERE status='approved' AND checkout_at IS NULL AND person_to_meet NOT IN ({}) ORDER BY id DESC".format(
             ",".join(["?"] * len(list(EMPLOYEE_EMAILS.keys())))
         ), list(EMPLOYEE_EMAILS.keys())
-    ).fetchall()]
+        ).fetchall()]
 
     recent_orders = [dict(r) for r in conn.execute("SELECT * FROM pantry_orders ORDER BY id DESC LIMIT 10").fetchall()]
     latest_pending_row = conn.execute("SELECT id FROM visitors WHERE status='pending' ORDER BY id DESC LIMIT 1").fetchone()
