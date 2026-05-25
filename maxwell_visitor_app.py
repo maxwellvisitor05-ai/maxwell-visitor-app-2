@@ -1407,7 +1407,7 @@ def employee_dashboard():
                 </div>
                 <button class="checkout-btn" onclick="checkout({vid})">&#128682; Checkout</button>
             </div>
-            <div class="order-section" id="order-{vid}" style="display:none">
+            <div class="order-section" id="order-{vid}" style="display:none;padding-bottom:40px">
                 <div class="order-block">
                     <div class="order-block-title">&#9749; Order Drink</div>
                     <div class="drink-row">
@@ -1432,7 +1432,7 @@ def employee_dashboard():
         </div>""".format(
             vid=vid, name=v["name"], time=v["created_at"],
             purpose=v["purpose"], drinks=drinks_opts,
-            vname=v["name"].replace("'", ""), person=name.replace("'", "")
+            vname=v["name"].replace("'", "\\'"), person=name.replace("'", "\\'")
         )
 
     if not active_cards:
