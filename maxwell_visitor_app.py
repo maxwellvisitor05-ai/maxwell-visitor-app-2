@@ -716,10 +716,10 @@ def admin():
     for r in conn.execute("SELECT status,COUNT(*) as cnt FROM visitors GROUP BY status").fetchall():
         counts[r["status"]] = r["cnt"]
 
-    admin_visitors = [dict(r) for r in conn.execute(
-        "SELECT * FROM visitors WHERE person_to_meet IN ({}) AND status='approved' AND checkout_at IS NULL ORDER BY id DESC".format(
-            ",".join(["?"] * len(ADMIN_MANAGED))
-        ), ADMIN_MANAGED
+   admin_visitors = [dict(r) for r in conn.execute(
+        "SELECT * FROM visitors WHERE status='approved' AND checkout_at IS NULL AND person_to_meet NOT IN ({}) ORDER BY id DESC".format(
+            ",".join(["?"] * len(list(EMPLOYEE_EMAILS.keys())))
+        ), list(EMPLOYEE_EMAILS.keys())
     ).fetchall()]
 
     recent_orders = [dict(r) for r in conn.execute("SELECT * FROM pantry_orders ORDER BY id DESC LIMIT 10").fetchall()]
