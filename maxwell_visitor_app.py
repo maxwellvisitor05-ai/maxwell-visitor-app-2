@@ -1768,6 +1768,18 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-s
     """ + hist_items + """
 </div>
 </div>
+<div class="modal-overlay" id="schedule-modal">
+    <div class="profile-modal">
+        <div class="modal-title">&#128197; Schedule Meeting</div>
+        <div class="form-group"><label>Visitor Name *</label><input type="text" id="sm-name" placeholder="Full name"></div>
+        <div class="form-group"><label>Phone Number *</label><input type="tel" id="sm-phone" placeholder="Mobile number"></div>
+        <div class="form-group"><label>WhatsApp Number (if different)</label><input type="tel" id="sm-wa" placeholder="Leave blank if same as phone"></div>
+        <div class="form-group"><label>Purpose *</label><input type="text" id="sm-purpose" placeholder="Purpose of visit"></div>
+        <div class="form-group"><label>Date & Time *</label><input type="datetime-local" id="sm-time"></div>
+        <button class="save-btn" onclick="submitSchedule()">&#128197; Schedule & Send WhatsApp</button>
+        <button class="close-modal" onclick="closeScheduleModal()">Cancel</button>
+    </div>
+</div>
 <div class="modal-overlay" id="profile-modal">
     <div class="profile-modal">
         <div class="modal-title">&#128100; My Profile</div>
@@ -1823,22 +1835,26 @@ async function rescheduleVisitor(vid,vname){
   var d=await r.json();
   if(d.success){showNotif('&#128197; Meeting rescheduled to '+dt,8000);location.reload();}
 }
-async function scheduleMeeting(){
-  var vname=prompt('Visitor Name:');if(!vname)return;
-  var vphone=prompt('Visitor Phone:');if(!vphone)return;
-  var purpose=prompt('Purpose of Visit:');if(!purpose)return;
-  var stime=prompt('Scheduled Date & Time (DD-MM-YYYY HH:MM):');if(!stime)return;
+function scheduleMeeting(){document.getElementById('schedule-modal').classList.add('open');}
+function closeScheduleModal(){document.getElementById('schedule-modal').classList.remove('open');}
+async function submitSchedule(){
+  var vname=document.getElementById('sm-name').value.trim();
+  var vphone=document.getElementById('sm-phone').value.trim();
+  var vwa=document.getElementById('sm-wa').value.trim()||vphone;
+  var purpose=document.getElementById('sm-purpose').value.trim();
+  var stime=document.getElementById('sm-time').value;
+  if(!vname||!vphone||!purpose||!stime){alert('Please fill all fields!');return;}
+  var stimeF=stime.split('T')[0].split('-').reverse().join('-')+' '+stime.split('T')[1];
   var r=await fetch('/api/schedule-meeting',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({visitor_name:vname,visitor_phone:vphone,purpose:purpose,scheduled_time:stime})});
+    body:JSON.stringify({visitor_name:vname,visitor_phone:vphone,visitor_wa:vwa,purpose:purpose,scheduled_time:stimeF})});
   var d=await r.json();
   if(d.success){
-    if(navigator.clipboard)navigator.clipboard.writeText(d.link);
-    var waNum=vphone.replace(/[^0-9]/g,'');
+    closeScheduleModal();
+    showNotif('&#128197; Meeting scheduled!',8000);
+    var waNum=vwa.replace(/[^0-9]/g,'');
     if(waNum.length===10)waNum='91'+waNum;
-    var waMsg=encodeURIComponent('Dear '+vname+',\n\nYour meeting has been scheduled at Maxwell Engineering Solutions.\n\nDate & Time: '+stime+'\n\nPlease fill your details before arriving:\n'+d.link+'\n\nThank you!');
-    var waUrl='https://wa.me/'+waNum+'?text='+waMsg;
-    showNotif('&#128197; Meeting scheduled! Opening WhatsApp...',5000);
-    setTimeout(function(){window.open(waUrl,'_blank');},500);
+    var msg='Dear '+vname+',\n\nYour meeting has been scheduled at Maxwell Engineering Solutions.\n\nDate & Time: '+stimeF+'\n\nPlease fill your details before arriving:\n'+d.link+'\n\nThank you!';
+    window.open('https://wa.me/'+waNum+'?text='+encodeURIComponent(msg),'_blank');
   }
 }
 async function checkNew(){try{var r0=await fetch('/api/latest-pending?host='+encodeURIComponent('""" + name + """'));var d0=await r0.json();if(_hwr&&d0.visitor&&d0.visitor.id>_lv){_beep(4);addNotifCount();showNotif('&#128276; New visitor: '+d0.visitor.name,15000);
