@@ -1283,27 +1283,6 @@ def schedule_meeting_api():
     link = base_url + "/scheduled-form/" + token
     return jsonify({"success": True, "link": link, "token": token})
 
-@app.route("/scheduled-form/<token>")
-def scheduled_form(token):
-    conn = get_db()
-    row = conn.execute("SELECT * FROM scheduled_meetings WHERE token=?", (token,)).fetchone()
-    conn.close()
-    if not row:
-        return "<h2 style='text-align:center;margin-top:80px;font-family:Arial;color:#C62828'>Invalid or expired link.</h2>"
-    m = dict(row)
-    return build_visitor_form({"name": m["visitor_name"], "phone": m["visitor_phone"], "purpose": m["purpose"], "person_to_meet": m["person_to_meet"]})
-
-@app.route("/api/reschedule/<int:vid>", methods=["POST"])
-def reschedule_visitor(vid):
-    data = request.get_json()
-    new_time = data.get("reschedule_time", "")
-    visitor_phone = data.get("visitor_phone", "")
-    conn = get_db()
-    conn.execute("UPDATE visitors SET reschedule_time=?, status='rescheduled' WHERE id=?", (new_time, vid))
-    conn.commit()
-    conn.close()
-    return jsonify({"success": True, "new_time": new_time})
-
 @app.route("/pantry-login", methods=["GET", "POST"])
 def pantry_login():
     err = ""
