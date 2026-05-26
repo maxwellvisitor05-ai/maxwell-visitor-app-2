@@ -224,6 +224,7 @@ def init_db():
             pass
     conn.execute("INSERT OR IGNORE INTO app_settings (key,value) VALUES ('admin_pin','1234')")
     conn.execute("INSERT OR IGNORE INTO app_settings (key,value) VALUES ('security_pass','1234')")
+    
     conn.commit()
     conn.close()
 
@@ -1658,7 +1659,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-s
     <button class="nav-item active" onclick="scrollTo(0,0)"><div class="nav-icon">&#127968;</div><span>Dashboard</span></button>
     <button class="nav-item" onclick="switchToVisitors()"><div class="nav-icon">&#128101;</div><span>Visitors</span></button>
     <button class="nav-item" onclick="location.href='/pantry'"><div class="nav-icon">&#9749;</div><span>Pantry</span></button>
-    <button class="nav-item" onclick="location.href='/'"><div class="nav-icon">&#128203;</div><span>Form</span></button>
+    <button class="nav-item" onclick="openSchedule()"><div class="nav-icon">&#128197;</div><span>Schedule</span></button>
     <button class="nav-item" onclick="openProfile()"><div class="nav-icon">&#128100;</div><span>Profile</span></button>
 </nav>
 <script>
@@ -1681,6 +1682,14 @@ function openProfile(){document.getElementById('profile-modal').classList.add('o
 function closeProfile(){document.getElementById('profile-modal').classList.remove('open');_newPhotoData=null;}
 function handlePhotoChange(input){if(!input.files||!input.files[0])return;var reader=new FileReader();reader.onload=function(e){_newPhotoData=e.target.result;document.getElementById('modal-profile-img').src=_newPhotoData;document.getElementById('hdr-profile-img').src=_newPhotoData;};reader.readAsDataURL(input.files[0]);}
 async function saveProfile(){var name=document.getElementById('p-name').value.trim();var dept=document.getElementById('p-dept').value.trim();var desig=document.getElementById('p-desig').value.trim();var payload={name:name,department:dept,designation:desig};if(_newPhotoData)payload.photo=_newPhotoData;var r=await fetch('/api/profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});var d=await r.json();if(d.success){showNotif('&#10003; Profile saved!',4000);closeProfile();}else{alert('Error saving profile!');}}
+function openSchedule(){document.getElementById('schedule-modal').style.display='flex';}
+function closeSchedule(){document.getElementById('schedule-modal').style.display='none';}
+function submitSchedule(){var name=document.getElementById('sm-name').value.trim();
+var phone=document.getElementById('sm-phone').value.trim();var company=document.getElementById('sm-company').value.trim();var purpose=document.getElementById('sm-purpose').value.trim();
+if(!name||!phone||!company||!purpose){alert('Please fill all fields!');return;}
+var waNum=phone.replace(/[^0-9]/g,'');if(waNum.length===10)waNum='91'+waNum;
+var msg='Dear '+name+',\n\nScheduled meeting at Maxwell.\n\nCompany: '+company+'\nPurpose: '+purpose+'\n\nThank you!';window.open('https://wa.me/'+waNum+'?text='+encodeURIComponent(msg),'_blank');closeSchedule();}
+
 async function checkNew(){try{var r0=await fetch('/api/latest-pending?host='+encodeURIComponent('""" + name + """'));var d0=await r0.json();if(_hwr&&d0.visitor&&d0.visitor.id>_lv){_beep(4);addNotifCount();showNotif('&#128276; New visitor: '+d0.visitor.name,15000);}if(d0.visitor)_lv=d0.visitor.id;_hwr=true;var r1=await fetch('/api/pending-count');var d1=await r1.json();document.title=d1.count>0?'('+d1.count+') Pending · """ + name + """':'""" + name + """ · Maxwell';}catch(e){}}
 if(Notification.permission==='default')Notification.requestPermission();
 setInterval(checkNew,8000);checkNew();
@@ -1892,7 +1901,41 @@ def app_icon():
     return Response(b64.b64decode(MW_ICON), mimetype="image/png")
 
 init_db()
+@app.route("/api/security-exit/<int:vid>", methods=["POST"])
+def security_exit(vid):
+    now = get_ist()
+    conn = get_db()
+    conn.execute("UPDATE visitors SET exit_at=? WHERE id=?", (now, vid))
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True, "exit_at": now})
+    @app.route("/api/schedule-meeting", methods=["POST"])
+def schedule_meeting_api():
+    if not session.get("emp_name"):
+        return jsonify({"error": "Not logged in"}), 401
+    data = request.get_json()
+    now = get_ist()
+    import secrets as sec_mod
+    token = sec_mod.token_urlsafe(16)
+    conn = get_db()
+    conn.execute("INSERT INTO scheduled_meetings (visitor_name,visitor_phone,purpose,person_to_meet,scheduled_time,created_at,token) VALUES (?,?,?,?,?,?,?)",
+        (data.get("visitor_name"), data.get("visitor_phone"), data.get("purpose"),
+         session["emp_name"], data.get("scheduled_time"), now, token))
+    conn.commit()
+    conn.close()
+    base_url = "https://maxwell-visitor-app-2.onrender.com"
+    link = base_url + "/scheduled-form/" + token
+    return jsonify({"success": True, "link": link, "token": token})
 
+@app.route("/api/reschedule/<int:vid>", methods=["POST"])
+def reschedule_visitor(vid):
+    data = request.get_json()
+    new_time = data.get("reschedule_time", "")
+    conn = get_db()
+    conn.execute("UPDATE visitors SET reschedule_time=?, status='rescheduled' WHERE id=?", (new_time, vid))
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True, "new_time": new_time})
 if __name__ == "__main__":
     print("\n" + "=" * 55)
     print("  Maxwell Engineering Solutions - Visitor System v2.0")
