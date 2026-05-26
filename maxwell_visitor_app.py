@@ -4,7 +4,7 @@
 from flask import Flask, request, jsonify, redirect, session, send_file
 import sqlite3, base64, io, os, hashlib, time
 from datetime import datetime, timezone, timedelta
-
+onclick="scheduleMeeting()"
 try:
     import psycopg2
     HAS_PG = True
@@ -1847,7 +1847,7 @@ function closeProfile(){document.getElementById('profile-modal').classList.remov
 function handlePhotoChange(input){if(!input.files||!input.files[0])return;var reader=new FileReader();reader.onload=function(e){_newPhotoData=e.target.result;document.getElementById('modal-profile-img').src=_newPhotoData;document.getElementById('hdr-profile-img').src=_newPhotoData;};reader.readAsDataURL(input.files[0]);}
 async function saveProfile(){var name=document.getElementById('p-name').value.trim();var dept=document.getElementById('p-dept').value.trim();var desig=document.getElementById('p-desig').value.trim();var payload={name:name,department:dept,designation:desig};if(_newPhotoData)payload.photo=_newPhotoData;var r=await fetch('/api/profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});var d=await r.json();if(d.success){showNotif('&#10003; Profile saved!',4000);closeProfile();}else{alert('Error saving profile!');}}
 async function rescheduleVisitor(vid,vname){
-  var dt=prompt('Enter new date and time for '+vname+' (DD-MM-YYYY HH:MM):');
+  var dt=prompt('New date/time (DD-MM-YYYY HH:MM):');+vname+' (DD-MM-YYYY HH:MM):');
   if(!dt)return;
   var r=await fetch('/api/reschedule/'+vid,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reschedule_time:dt})});
   var d=await r.json();
