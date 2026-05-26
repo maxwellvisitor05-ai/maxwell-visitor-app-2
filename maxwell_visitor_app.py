@@ -1937,6 +1937,7 @@ def reschedule_visitor(vid):
     conn.commit()
     conn.close()
     return jsonify({"success": True, "new_time": new_time})
+    init_db()
 if __name__ == "__main__":
     print("\n" + "=" * 55)
     print("  Maxwell Engineering Solutions - Visitor System v2.0")
