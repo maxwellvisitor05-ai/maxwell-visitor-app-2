@@ -564,6 +564,7 @@ async function submitForm(){
   }catch(e){showAlert('Server error!');}
 }
 </script>
+<script>" + BEEP_JS + "</script>
 </body></html>"""
 
     html = html.replace("HEADER_PLACEHOLDER", header)
