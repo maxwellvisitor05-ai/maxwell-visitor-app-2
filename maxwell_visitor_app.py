@@ -132,8 +132,7 @@ BEEP_JS = (
     "catch(e){}}"
     "var _soundEnabled=false;"
     "function _enableSound(){"
-    "try{if(!_audioCtx){_audioCtx=new(window.AudioContext||window.webkitAudioContext)();}"
-    "if(_audioCtx&&_audioCtx.state==='suspended'){_audioCtx.resume();}"
+    "if(_audioCtx)_audioCtx.resume();"
     "_soundEnabled=true;"
     "var b=document.getElementById('snd-btn');if(b)b.style.display='none';"
     "var ok=document.getElementById('snd-ok');"
@@ -185,16 +184,9 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT, phone TEXT, purpose TEXT, host_name TEXT,
         category TEXT, department TEXT, person_to_meet TEXT,
-        photo TEXT, doc_photo TEXT, status TEXT DEFAULT 'pending',
-        created_at TEXT, checkout_at TEXT, exit_at TEXT, pass_number TEXT,
-        advance_token TEXT, scheduled_time TEXT, reschedule_time TEXT
-    )""")
-    conn.execute("""CREATE TABLE IF NOT EXISTS scheduled_meetings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        visitor_name TEXT, visitor_phone TEXT, purpose TEXT,
-        person_to_meet TEXT, department TEXT, category TEXT,
-        scheduled_time TEXT, status TEXT DEFAULT 'pending',
-        created_at TEXT, token TEXT
+        photo TEXT, status TEXT DEFAULT 'pending',
+        created_at TEXT, checkout_at TEXT, pass_number TEXT,
+        advance_token TEXT
     )""")
     conn.execute("""CREATE TABLE IF NOT EXISTS pantry_orders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -220,14 +212,7 @@ def init_db():
         key TEXT PRIMARY KEY,
         value TEXT
     )""")
-    conn.execute("""CREATE TABLE IF NOT EXISTS scheduled_meetings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        visitor_name TEXT, visitor_phone TEXT, purpose TEXT,
-        person_to_meet TEXT, scheduled_time TEXT,
-        status TEXT DEFAULT 'pending', token TEXT,
-        created_at TEXT
-    )""")
-    for col in ["checkout_at TEXT", "advance_token TEXT", "exit_at TEXT", "doc_photo TEXT", "scheduled_time TEXT", "reschedule_time TEXT"]:
+    for col in ["checkout_at TEXT", "advance_token TEXT"]:
         try:
             conn.execute("ALTER TABLE visitors ADD COLUMN {}".format(col))
         except:
@@ -302,6 +287,7 @@ if HAS_SCHEDULER:
     except:
         pass
 
+
 # ═══════════════════════════════════════════════════
 # VISITOR FORM
 # ═══════════════════════════════════════════════════
@@ -319,15 +305,6 @@ def build_visitor_form(prefill):
     html = """<!DOCTYPE html><html lang="en"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Maxwell - Visitor Management</title>
-<script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
-<script>
-  window.OneSignalDeferred = window.OneSignalDeferred || [];
-  OneSignalDeferred.push(async function(OneSignal) {
-    await OneSignal.init({
-      appId: "178ecef1-8423-4186-90cf-653b8301126c",
-    });
-  });
-</script>
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#1565C0">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -416,36 +393,6 @@ SOUND_WIDGET_PLACEHOLDER
         </div>
       </div>
     </div>
-    <div class="card">
-      <div class="section-title">&#128196; ID / Document Photo *</div>
-      <div style="text-align:center;padding:8px 0">
-        <span id="doc-icon" style="font-size:45px;color:#ddd;display:block;margin:6px 0">&#128196;</span>
-        <img id="doc-preview" src="" alt="Document" style="max-width:100%;max-height:180px;border-radius:8px;border:2px solid #1565C0;display:none;margin:8px auto">
-        <div style="margin-top:10px">
-          <label class="btn btn-blue" style="cursor:pointer">&#128190; Upload
-            <input type="file" id="doc-input" accept="image/*,application/pdf" style="display:none" onchange="handleDocUpload(this)">
-          </label>
-          <button class="btn btn-blue" onclick="startDocCam()" id="doc-cam-btn">&#128247; Camera</button>
-          <button class="btn btn-red" id="doc-ret-btn" onclick="removeDoc()" style="display:none">&#10005; Remove</button>
-        </div>
-        <div id="doc-name" style="font-size:12px;color:#888;margin-top:6px"></div>
-      </div>
-    </div>
-    <div class="card">
-      <div class="section-title">&#128196; Legal Document Photo <span class="req">*</span></div>
-      <div style="text-align:center;padding:8px 0">
-        <span id="doc-icon" style="font-size:45px;color:#ddd;display:block;margin:6px 0">&#128196;</span>
-        <img id="doc-preview" src="" alt="Document" style="max-width:100%;max-height:180px;border-radius:8px;border:2px solid #1565C0;display:none;margin:8px auto">
-        <div style="margin-top:10px">
-          <button class="btn btn-blue" onclick="startDocCam()" id="doc-cam-btn">&#128247; Camera</button>
-          <label class="btn btn-blue" style="cursor:pointer">&#128190; Upload
-            <input type="file" id="doc-input" accept="image/*,application/pdf" style="display:none" onchange="handleDocUpload(this)">
-          </label>
-          <button class="btn btn-red" id="doc-ret-btn" onclick="removeDoc()" style="display:none">&#10005; Remove</button>
-        </div>
-        <div id="doc-name" style="font-size:12px;color:#888;margin-top:6px"></div>
-      </div>
-    </div>
     <button class="submit-btn" onclick="submitForm()">SUBMIT</button>
   </div>
   <div id="submitted-section" class="hidden">
@@ -507,38 +454,6 @@ function capPhoto(){
   document.getElementById('ret-btn').style.display='';if(camStream)camStream.getTracks().forEach(function(t){t.stop();});
 }
 function retake(){photoData=null;document.getElementById('photo-preview').style.display='none';document.getElementById('ret-btn').style.display='none';document.getElementById('ph-icon').style.display='block';startCam();}
-var docData=null,docStream=null;
-function handleDocUpload(input){if(!input.files||!input.files[0])return;var file=input.files[0];document.getElementById('doc-name').textContent=file.name;var reader=new FileReader();reader.onload=function(e){docData=e.target.result;if(file.type.startsWith('image/')){document.getElementById('doc-preview').src=docData;document.getElementById('doc-preview').style.display='block';}else{document.getElementById('doc-preview').style.display='none';}document.getElementById('doc-icon').style.display='none';document.getElementById('doc-ret-btn').style.display='';};reader.readAsDataURL(file);}
-function removeDoc(){docData=null;document.getElementById('doc-preview').style.display='none';document.getElementById('doc-icon').style.display='block';document.getElementById('doc-ret-btn').style.display='none';document.getElementById('doc-name').textContent='';document.getElementById('doc-input').value='';document.getElementById('doc-cam-btn').style.display='';}
-function startDocCam(){document.getElementById('doc-cam-btn').style.display='none';var area=document.getElementById('doc-ret-btn').parentNode;var v=document.createElement('video');v.autoplay=true;v.playsinline=true;v.style.cssText='width:100%;max-width:300px;border-radius:8px;margin:8px auto;display:block';var c=document.createElement('canvas');c.style.display='none';var btn=document.createElement('button');btn.className='btn btn-green';btn.innerHTML='&#10003; Capture';btn.style.margin='8px';btn.onclick=function(){c.width=v.videoWidth;c.height=v.videoHeight;c.getContext('2d').drawImage(v,0,0);docData=c.toDataURL('image/jpeg',0.8);document.getElementById('doc-preview').src=docData;document.getElementById('doc-preview').style.display='block';document.getElementById('doc-icon').style.display='none';document.getElementById('doc-ret-btn').style.display='';if(docStream)docStream.getTracks().forEach(function(t){t.stop();});v.remove();c.remove();btn.remove();document.getElementById('doc-cam-btn').style.display='';};navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}}).then(function(s){docStream=s;v.srcObject=s;area.appendChild(v);area.appendChild(c);area.appendChild(btn);}).catch(function(){alert('Camera not available!');document.getElementById('doc-cam-btn').style.display='';});}
-var docData=null;
-function handleDocUpload(input){if(!input.files||!input.files[0])return;var file=input.files[0];document.getElementById('doc-name').textContent=file.name;var reader=new FileReader();reader.onload=function(e){docData=e.target.result;if(file.type.startsWith('image/')){document.getElementById('doc-preview').src=docData;document.getElementById('doc-preview').style.display='block';}else{document.getElementById('doc-preview').style.display='none';}document.getElementById('doc-icon').style.display='none';document.getElementById('doc-ret-btn').style.display='';};reader.readAsDataURL(file);}
-function removeDoc(){docData=null;document.getElementById('doc-preview').style.display='none';document.getElementById('doc-icon').style.display='block';document.getElementById('doc-ret-btn').style.display='none';document.getElementById('doc-name').textContent='';document.getElementById('doc-input').value='';}
-var docStream=null;
-function startDocCam(){
-  document.getElementById('doc-cam-btn').style.display='none';
-  var area=document.getElementById('doc-ret-btn').parentNode;
-  var v=document.createElement('video');v.autoplay=true;v.playsinline=true;
-  v.style.cssText='width:100%;max-width:300px;border-radius:8px;margin:8px auto;display:block';
-  var c=document.createElement('canvas');c.style.display='none';
-  var btn=document.createElement('button');btn.className='btn btn-green';
-  btn.innerHTML='&#10003; Capture';btn.style.margin='8px';
-  btn.onclick=function(){
-    c.width=v.videoWidth;c.height=v.videoHeight;
-    c.getContext('2d').drawImage(v,0,0);
-    docData=c.toDataURL('image/jpeg',0.8);
-    document.getElementById('doc-preview').src=docData;
-    document.getElementById('doc-preview').style.display='block';
-    document.getElementById('doc-icon').style.display='none';
-    document.getElementById('doc-ret-btn').style.display='';
-    if(docStream)docStream.getTracks().forEach(function(t){t.stop();});
-    v.remove();c.remove();btn.remove();
-    document.getElementById('doc-cam-btn').style.display='';
-  };
-  navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}})
-    .then(function(s){docStream=s;v.srcObject=s;area.appendChild(v);area.appendChild(c);area.appendChild(btn);})
-    .catch(function(){alert('Camera not available!');document.getElementById('doc-cam-btn').style.display='';});
-}
 function showAlert(msg){document.getElementById('alert-box').innerHTML='<div class="alert alert-error">'+msg+'</div>';setTimeout(function(){document.getElementById('alert-box').innerHTML='';},5000);}
 async function submitForm(){
   var name=document.getElementById('v-name').value.trim();
@@ -554,17 +469,16 @@ async function submitForm(){
   if(!company){showAlert('Please enter company/organization!');return;}
   if(!purpose){showAlert('Please enter purpose!');return;}
   if(!cat){showAlert('Please select visitor category!');return;}
-  if(!person){showAlert('Please select person to meet!');return;}if(!docData){showAlert('Please upload or capture Legal Document photo!');return;}if(!docData){showAlert('Please upload or capture ID/Document photo!');return;}
+  if(!person){showAlert('Please select person to meet!');return;}
   try{
     var res=await fetch('/api/visitor',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({name:name,phone:phone,purpose:purpose,host_name:host,company:company,category:cat,department:dept,person_to_meet:person,photo:photoData,doc_photo:docData})});
+      body:JSON.stringify({name:name,phone:phone,purpose:purpose,host_name:host,company:company,category:cat,department:dept,person_to_meet:person,photo:photoData})});
     var data=await res.json();
     if(data.success){document.getElementById('form-section').classList.add('hidden');document.getElementById('submitted-section').classList.remove('hidden');}
     else{showAlert('Error: '+(data.error||'Unknown error'));}
   }catch(e){showAlert('Server error!');}
 }
 </script>
-<script>" + BEEP_JS + "</script>
 </body></html>"""
 
     html = html.replace("HEADER_PLACEHOLDER", header)
@@ -573,6 +487,7 @@ async function submitForm(){
     html = html.replace("FACTORY_JS", factory_js)
     html = html.replace("MGMT_JS", json.dumps(MANAGEMENT_LIST))
     return html
+
 
 @app.route("/api/visitor", methods=["POST"])
 def create_visitor():
@@ -583,9 +498,9 @@ def create_visitor():
     c.execute("SELECT COUNT(*) FROM visitors")
     count = c.fetchone()[0] + 1
     pass_num = "MW-" + datetime.now().strftime("%Y%m%d") + "-" + str(count).zfill(4)
-    c.execute("INSERT INTO visitors (name,phone,purpose,host_name,category,department,person_to_meet,photo,doc_photo,created_at,pass_number) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+    c.execute("INSERT INTO visitors (name,phone,purpose,host_name,category,department,person_to_meet,photo,created_at,pass_number) VALUES (?,?,?,?,?,?,?,?,?,?)",
               (data.get("name"), data.get("phone"), data.get("purpose"), data.get("host_name"),
-               data.get("category"), data.get("department"), data.get("person_to_meet"), data.get("photo"), data.get("doc_photo"), now, pass_num))
+               data.get("category"), data.get("department"), data.get("person_to_meet"), data.get("photo"), now, pass_num))
     conn.commit()
     conn.close()
     return jsonify({"success": True})
@@ -665,27 +580,6 @@ def checkout_visitor(vid):
     conn.close()
     return jsonify({"success": True, "checkout_at": now})
 
-@app.route("/api/security-exit/<int:vid>", methods=["POST"])
-def security_exit(vid):
-    now = get_ist()
-    conn = get_db()
-    conn.execute("UPDATE visitors SET exit_at=? WHERE id=?", (now, vid))
-    conn.commit()
-    v = dict(conn.execute("SELECT checkout_at,exit_at FROM visitors WHERE id=?", (vid,)).fetchone())
-    conn.close()
-    diff = ""
-    if v.get("checkout_at") and v.get("exit_at"):
-        try:
-            from datetime import datetime as dt2
-            fmt = "%d-%m-%Y %H:%M"
-            t1 = dt2.strptime(v["checkout_at"], fmt)
-            t2 = dt2.strptime(v["exit_at"], fmt)
-            mins = int((t2-t1).total_seconds()/60)
-            diff = str(mins) + " min"
-        except:
-            diff = ""
-    return jsonify({"success": True, "exit_at": now, "diff": diff})
-
 @app.route("/api/beverage", methods=["POST"])
 def order_beverage():
     data = request.get_json()
@@ -741,6 +635,7 @@ def save_profile():
     )
     return jsonify({"success": True})
 
+
 @app.route("/pass/<int:vid>")
 def show_pass(vid):
     conn = get_db()
@@ -787,6 +682,7 @@ def show_pass(vid):
             "<button onclick='window.print()' style='background:#1565C0;color:white;padding:10px 20px;border:none;border-radius:7px;cursor:pointer;font-size:14px'>Print Pass</button>"
             "</div><script>setTimeout(function(){window.print();},600);</script>"
             "</body></html>")
+
 
 # ══════════════════════════════════════════════════
 # ADMIN
@@ -850,10 +746,7 @@ def admin():
         if v["status"] == "pending":
             ab += '<button class="btn ba" onclick="act(' + str(v["id"]) + ",'approve'" + ')">&#10003; Approve</button>'
             ab += '<button class="btn br" onclick="act(' + str(v["id"]) + ",'reject'" + ')">&#10005; Reject</button>'
-            ab += ('<button class="btn" style="background:#1565C0;color:white" '
-                   'onclick="openAdminReschedule(' + str(v["id"]) + ',\''
-                   + str(v["name"]).replace("'", "") + '\',\''
-                   + str(v.get("phone", "")) + '\')">📅 Reschedule</button>')
+        if v["status"] == "approved" and not v.get("checkout_at"):
             ab += '<button class="btn bc" onclick="checkout(' + str(v["id"]) + ')">&#128682; Checkout</button>'
         ab += '<button class="btn bp" onclick="window.open(\'/pass/' + str(v["id"]) + '\')">Pass</button>'
         co = v.get("checkout_at") or "-"
@@ -863,7 +756,6 @@ def admin():
                  "<td>" + str(v["person_to_meet"]) + "</td>"
                  "<td style='font-size:11px'>" + str(v["created_at"]) + "</td>"
                  "<td style='font-size:11px'>" + co + "</td>"
-                 "<td style='font-size:11px'>" + exit_time + diff_txt + "</td>"
                  "<td><span class='badge " + bc + "'>" + v["status"].upper() + "</span></td>"
                  "<td>" + ab + "</td></tr>")
     if not rows:
@@ -948,7 +840,7 @@ def admin():
         '<a href="/admin-logout">Logout</a>'
         '</div></div>')
 
-    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Maxwell Admin</title><script src='https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js' defer></script><script>window.OneSignalDeferred=window.OneSignalDeferred||[];OneSignalDeferred.push(async function(OneSignal){await OneSignal.init({appId:'178ecef1-8423-4186-90cf-653b8301126c'});});</script>"
+    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Maxwell Admin</title>"
             "<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial;background:#f0f4f8}"
             + HEADER_CSS +
             ".header h1{display:none}"
@@ -1020,7 +912,6 @@ def admin():
             "var _aqty={};"
             "var _vt=" + json.dumps(visitor_times) + ";"
             "function exportExcel(){var from=document.getElementById('f-from').value;var to=document.getElementById('f-to').value;var dept=document.getElementById('f-dept').value;var status=document.getElementById('f-status').value;window.open('/admin/export?from='+encodeURIComponent(from)+'&to='+encodeURIComponent(to)+'&dept='+encodeURIComponent(dept)+'&status='+encodeURIComponent(status));}"
-            "function openAdminReschedule(vid,vname,vphone){var dt=prompt('New date/time for '+vname+' (DD-MM-YYYY HH:MM):');if(!dt)return;fetch('/api/reschedule/'+vid,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reschedule_time:dt,visitor_phone:vphone})}).then(function(r){return r.json();}).then(function(d){if(d.success){showNotif('&#128197; Rescheduled to '+dt,8000);if(vphone){var waNum=vphone.replace(/[^0-9]/g,'');if(waNum.length===10)waNum='91'+waNum;var msg='Dear Visitor,\\n\\nYour meeting has been rescheduled to '+dt+'\\n\\nThank you!';window.open('https://wa.me/'+waNum+'?text='+encodeURIComponent(msg),'_blank');}}});}"
             "async function act(id,action){if(!confirm(action+' this visitor?'))return;var r=await fetch('/action/'+id+'/'+action,{headers:{'Accept':'application/json'}});if(action==='approve'){window.open('/pass/'+id);}location.reload();}"
             "async function checkout(id){if(!confirm('Checkout this visitor?'))return;await fetch('/api/checkout/'+id,{method:'POST'});location.reload();}"
             "async function adminCheckout(id){if(!confirm('Checkout this visitor?'))return;await fetch('/api/checkout/'+id,{method:'POST'});location.reload();}"
@@ -1063,9 +954,7 @@ def admin():
             "if(Notification.permission==='default'){Notification.requestPermission();}"
             "setInterval(_chkNew,8000);_chkNew();"
             "setInterval(checkAdminOrders,15000);checkAdminOrders();"
-            "</script>"
-            + SOUND_WIDGET +
-            "</body></html>")
+            "</script></body></html>")
 
 @app.route("/admin-login", methods=["POST"])
 def admin_login():
@@ -1144,6 +1033,7 @@ def admin_settings():
             "<button type='submit'>Update Password</button></form></div>"
             "</div></body></html>")
 
+
 @app.route("/admin/export")
 def export_excel():
     if not session.get("admin_ok"):
@@ -1214,76 +1104,10 @@ def export_excel():
     return send_file(buf, as_attachment=True, download_name=filename,
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-# ══════════════════════════════════════════════════
-# SCHEDULED MEETINGS
-# ══════════════════════════════════════════════════
-@app.route("/api/schedule-meeting", methods=["POST"])
-def schedule_meeting():
-    if not session.get("emp_name"):
-        return jsonify({"error": "Not logged in"}), 401
-    data = request.get_json()
-    now = get_ist()
-    import secrets
-    token = secrets.token_urlsafe(16)
-    conn = get_db()
-    conn.execute("INSERT INTO scheduled_meetings (visitor_name,visitor_phone,purpose,person_to_meet,department,category,scheduled_time,created_at,token) VALUES (?,?,?,?,?,?,?,?,?)",
-        (data.get("visitor_name"), data.get("visitor_phone"), data.get("purpose"),
-         session["emp_name"], data.get("department","Staff Visit"), data.get("category","Staff Visit"),
-         data.get("scheduled_time"), now, token))
-    conn.commit()
-    conn.close()
-    base_url = "https://maxwell-visitor-app-2.onrender.com"
-    link = base_url + "/scheduled-form/" + token
-    return jsonify({"success": True, "link": link, "token": token})
-
-@app.route("/scheduled-form/<token>")
-def scheduled_form(token):
-    conn = get_db()
-    row = conn.execute("SELECT * FROM scheduled_meetings WHERE token=?", (token,)).fetchone()
-    conn.close()
-    if not row:
-        return "<h2 style='text-align:center;margin-top:80px;font-family:Arial;color:#C62828'>Invalid or expired link.</h2>"
-    m = dict(row)
-    return build_visitor_form({
-        "name": m["visitor_name"],
-        "phone": m["visitor_phone"],
-        "purpose": m["purpose"],
-        "person_to_meet": m["person_to_meet"],
-        "prefill": True
-    })
-
-@app.route("/api/reschedule/<int:vid>", methods=["POST"])
-def reschedule_visitor(vid):
-    data = request.get_json()
-    new_time = data.get("reschedule_time", "")
-    conn = get_db()
-    conn.execute("UPDATE visitors SET reschedule_time=?, status='rescheduled' WHERE id=?", (new_time, vid))
-    v = dict(conn.execute("SELECT * FROM visitors WHERE id=?", (vid,)).fetchone())
-    conn.commit()
-    conn.close()
-    return jsonify({"success": True, "visitor": v, "new_time": new_time})
 
 # ══════════════════════════════════════════════════
 # PANTRY
 # ══════════════════════════════════════════════════
-@app.route("/api/schedule-meeting", methods=["POST"])
-def schedule_meeting_api():
-    if not session.get("emp_name"):
-        return jsonify({"error": "Not logged in"}), 401
-    data = request.get_json()
-    now = get_ist()
-    import secrets as sec_mod
-    token = sec_mod.token_urlsafe(16)
-    conn = get_db()
-    conn.execute("INSERT INTO scheduled_meetings (visitor_name,visitor_phone,purpose,person_to_meet,scheduled_time,created_at,token) VALUES (?,?,?,?,?,?,?)",
-        (data.get("visitor_name"), data.get("visitor_phone"), data.get("purpose"),
-         session["emp_name"], data.get("scheduled_time"), now, token))
-    conn.commit()
-    conn.close()
-    base_url = "https://maxwell-visitor-app-2.onrender.com"
-    link = base_url + "/scheduled-form/" + token
-    return jsonify({"success": True, "link": link, "token": token})
-
 @app.route("/pantry-login", methods=["GET", "POST"])
 def pantry_login():
     err = ""
@@ -1331,25 +1155,7 @@ def pantry():
         drink_info = str(o.get("drink", "") or "-")
         qty = str(o.get("quantity", ""))
         snacks_info = str(o.get("snacks", "")) if o.get("snacks") else "-"
-        raw_note = str(o.get("note", "") or "")
-        # Translate note to Gujarati using simple word mapping
-        guj_note = raw_note
-        sugar_map = {
-            "with sugar": "ખાંડ સાથે",
-            "without sugar": "ખાંડ વગર",
-            "no sugar": "ખાંડ નહી",
-            "less sugar": "ઓછી ખાંડ",
-            "more sugar": "વધુ ખાંડ",
-            "with milk": "દૂધ સાથે",
-            "without milk": "દૂધ વગર",
-            "strong": "કડક",
-            "light": "હળવો",
-            "hot": "ગરમ",
-            "cold": "ઠંડો",
-        }
-        for eng, guj in sugar_map.items():
-            guj_note = guj_note.replace(eng, guj)
-        note_info = (raw_note + " | " + guj_note) if guj_note != raw_note and raw_note else (raw_note or "-")
+        note_info = str(o.get("note", "") or "-")
 
         speak_parts = []
         if o.get("drink") and o["drink"] != "-":
@@ -1395,7 +1201,7 @@ def pantry():
         '<div class="hdr-logo-wrap"><img src="' + LOGO_MAIN + '" class="hdr-logo" alt="Maxwell"></div>'
         '<div class="hdr-nav"><a href="/admin">Admin</a><a href="/pantry-logout">Logout</a></div></div>')
 
-    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Pantry Dashboard</title><script src='https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js' defer></script><script>window.OneSignalDeferred=window.OneSignalDeferred||[];OneSignalDeferred.push(async function(OneSignal){await OneSignal.init({appId:'178ecef1-8423-4186-90cf-653b8301126c'});});</script>"
+    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Pantry Dashboard</title>"
             "<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial;background:#f0f4f8}"
             + HEADER_CSS +
             ".container{max-width:1050px;margin:20px auto;padding:0 15px}"
@@ -1485,6 +1291,7 @@ def pantry_logout():
     session.pop("pantry_ok", None)
     return redirect("/pantry-login")
 
+
 # ══════════════════════════════════════════════════
 # EMPLOYEE
 # ══════════════════════════════════════════════════
@@ -1550,6 +1357,7 @@ def employee_login():
             + ("<p class='err'>" + err + "</p>" if err else "")
             + "</div><a href='/'>&#8592; Back to Visitor Form</a>"
             "</body></html>")
+
 
 @app.route("/employee-dashboard")
 def employee_dashboard():
@@ -1654,13 +1462,11 @@ def employee_dashboard():
             <div class="pi-actions">
                 <button class="pi-approve" onclick="act({vid},'approve')">&#10003;</button>
                 <button class="pi-reject" onclick="act({vid},'reject')">&#10007;</button>
-                <button class="pi-reschedule" onclick="openRescheduleModal('{vid}','{name_r}','')" title="Reschedule">&#128197;</button>
             </div>
         </div>""".format(
             vid=vid, photo=photo, name=v["name"],
             dept=v["department"] + " · " + v["purpose"][:25],
-            time=v["created_at"],
-            name_r=v["name"].replace("'","")
+            time=v["created_at"]
         )
     if not pending_cards:
         pending_cards = '<div class="empty-state small"><div class="es-icon">&#10003;</div><div class="es-text">No pending requests</div></div>'
@@ -1692,15 +1498,6 @@ def employee_dashboard():
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>""" + name + """ · Maxwell</title>
-<script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
-<script>
-  window.OneSignalDeferred = window.OneSignalDeferred || [];
-  OneSignalDeferred.push(async function(OneSignal) {
-    await OneSignal.init({
-      appId: "178ecef1-8423-4186-90cf-653b8301126c",
-    });
-  });
-</script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;background:#F2F4F7;min-height:100vh;padding-bottom:90px;color:#1A1A2E}
@@ -1758,8 +1555,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-s
 .pi-actions{display:flex;gap:6px;flex-shrink:0}
 .pi-approve{width:34px;height:34px;background:#E8F5E9;color:#2E7D32;border:none;border-radius:50%;font-size:16px;font-weight:700;cursor:pointer}
 .pi-reject{width:34px;height:34px;background:#FFEBEE;color:#C62828;border:none;border-radius:50%;font-size:16px;font-weight:700;cursor:pointer}
-.pi-reschedule{width:34px;height:34px;background:#E3F2FD;color:#1565C0;border:none;border-radius:50%;font-size:16px;cursor:pointer}
-.pi-reschedule{width:34px;height:34px;background:#E3F2FD;color:#1565C0;border:none;border-radius:50%;font-size:16px;cursor:pointer}
 .hist-row{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid #F5F5F5}
 .hist-row:last-child{border-bottom:none}
 .hist-av{width:40px;height:40px;border-radius:50%;color:white;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;flex-shrink:0}
@@ -1839,51 +1634,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-s
     """ + hist_items + """
 </div>
 </div>
-<div class="modal-overlay" id="schedule-modal">
-    <div class="profile-modal">
-        <div class="modal-title">&#128197; Schedule Meeting</div>
-        <div class="form-group"><label>Visitor Name *</label><input type="text" id="sm-name" placeholder="Full name"></div>
-        <div class="form-group"><label>Mobile Number *</label><input type="tel" id="sm-phone" placeholder="Visitor mobile number"></div>
-        <div class="form-group"><label>Purpose *</label><input type="text" id="sm-purpose" placeholder="Purpose of visit"></div>
-        <div class="form-group"><label>Date & Time *</label><input type="datetime-local" id="sm-time"></div>
-        <button class="save-btn" onclick="submitSchedule()">&#128197; Schedule & Send WhatsApp</button>
-        <button class="close-modal" onclick="closeSchedule()">Cancel</button>
-    </div>
-</div>
-<div class="modal-overlay" id="reschedule-modal">
-    <div class="profile-modal">
-        <div class="modal-title">&#128197; Reschedule Meeting</div>
-        <input type="hidden" id="rs-vid">
-        <div style="text-align:center;font-size:14px;font-weight:700;color:#1565C0;margin-bottom:16px">Visitor: <span id="rs-name"></span></div>
-        <div class="form-group"><label>Visitor WhatsApp Number</label><input type="tel" id="rs-phone" placeholder="For sending WhatsApp notification"></div>
-        <div class="form-group"><label>New Date & Time *</label><input type="datetime-local" id="rs-time"></div>
-        <button class="save-btn" onclick="submitReschedule()">&#128247; Reschedule &amp; Send WhatsApp</button>
-        <button class="close-modal" onclick="closeRescheduleModal()">Cancel</button>
-    </div>
-</div>
-<div class="modal-overlay" id="schedule-modal">
-    <div class="profile-modal">
-        <div class="modal-title">&#128197; Schedule Meeting</div>
-        <div class="form-group"><label>Visitor Name *</label><input type="text" id="sm-name" placeholder="Full name"></div>
-        <div class="form-group"><label>Phone Number *</label><input type="tel" id="sm-phone" placeholder="Mobile number"></div>
-        <div class="form-group"><label>WhatsApp Number (if different)</label><input type="tel" id="sm-wa" placeholder="Leave blank if same as phone"></div>
-        <div class="form-group"><label>Purpose *</label><input type="text" id="sm-purpose" placeholder="Purpose of visit"></div>
-        <div class="form-group"><label>Date & Time *</label><input type="datetime-local" id="sm-time"></div>
-        <button class="save-btn" onclick="submitSchedule()">&#128197; Schedule & Send WhatsApp</button>
-        <button class="close-modal" onclick="closeScheduleModal()">Cancel</button>
-    </div>
-</div>
-<div class="modal-overlay" id="reschedule-modal">
-    <div class="profile-modal">
-        <div class="modal-title">&#128197; Reschedule Meeting</div>
-        <input type="hidden" id="rs-vid">
-        <div style="text-align:center;font-size:14px;font-weight:700;color:#1565C0;margin-bottom:16px">Visitor: <span id="rs-vname"></span></div>
-        <div class="form-group"><label>WhatsApp Number</label><input type="tel" id="rs-phone" placeholder="Visitor WhatsApp number"></div>
-        <div class="form-group"><label>New Date & Time *</label><input type="datetime-local" id="rs-time"></div>
-        <button class="save-btn" onclick="submitReschedule()">&#128197; Reschedule & Send WhatsApp</button>
-        <button class="close-modal" onclick="closeReschedule()">Cancel</button>
-    </div>
-</div>
 <div class="modal-overlay" id="profile-modal">
     <div class="profile-modal">
         <div class="modal-title">&#128100; My Profile</div>
@@ -1908,10 +1658,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-s
     <button class="nav-item active" onclick="scrollTo(0,0)"><div class="nav-icon">&#127968;</div><span>Dashboard</span></button>
     <button class="nav-item" onclick="switchToVisitors()"><div class="nav-icon">&#128101;</div><span>Visitors</span></button>
     <button class="nav-item" onclick="location.href='/pantry'"><div class="nav-icon">&#9749;</div><span>Pantry</span></button>
-    <button class="nav-item" onclick="scheduleMeeting()"><div class="nav-icon">&#128197;</div><span>Schedule</span></button>
+    <button class="nav-item" onclick="location.href='/'"><div class="nav-icon">&#128203;</div><span>Form</span></button>
     <button class="nav-item" onclick="openProfile()"><div class="nav-icon">&#128100;</div><span>Profile</span></button>
 </nav>
-""" + SOUND_WIDGET + """
 <script>
 """ + BEEP_JS + """
 var _qty={},_lv=""" + str(latest_hp_id) + """,_hwr=true,_notifCount=0,_oc=0;
@@ -1932,101 +1681,7 @@ function openProfile(){document.getElementById('profile-modal').classList.add('o
 function closeProfile(){document.getElementById('profile-modal').classList.remove('open');_newPhotoData=null;}
 function handlePhotoChange(input){if(!input.files||!input.files[0])return;var reader=new FileReader();reader.onload=function(e){_newPhotoData=e.target.result;document.getElementById('modal-profile-img').src=_newPhotoData;document.getElementById('hdr-profile-img').src=_newPhotoData;};reader.readAsDataURL(input.files[0]);}
 async function saveProfile(){var name=document.getElementById('p-name').value.trim();var dept=document.getElementById('p-dept').value.trim();var desig=document.getElementById('p-desig').value.trim();var payload={name:name,department:dept,designation:desig};if(_newPhotoData)payload.photo=_newPhotoData;var r=await fetch('/api/profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});var d=await r.json();if(d.success){showNotif('&#10003; Profile saved!',4000);closeProfile();}else{alert('Error saving profile!');}}
-function openRescheduleModal(vid,vname,vphone){
-  document.getElementById('rs-vid').value=vid;
-  document.getElementById('rs-name').textContent=vname;
-  document.getElementById('rs-phone').value=vphone||'';
-  document.getElementById('rs-time').value='';
-  document.getElementById('reschedule-modal').classList.add('open');
-}
-function closeRescheduleModal(){document.getElementById('reschedule-modal').classList.remove('open');}
-async function submitReschedule(){
-  var vid=document.getElementById('rs-vid').value;
-  var vphone=document.getElementById('rs-phone').value;
-  var stime=document.getElementById('rs-time').value;
-  if(!stime){alert('Please select date & time!');return;}
-  var stimeF=stime.split('T')[0].split('-').reverse().join('-')+' '+stime.split('T')[1];
-  var r=await fetch('/api/reschedule/'+vid,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reschedule_time:stimeF})});
-  var d=await r.json();
-  if(d.success){
-    closeRescheduleModal();
-    showNotif('&#128197; Meeting rescheduled!',8000);
-    var waNum=vphone.replace(/[^0-9]/g,'');
-    if(waNum.length===10)waNum='91'+waNum;
-    if(waNum){
-      var msg='Dear Visitor,\n\nYour meeting at Maxwell Engineering Solutions has been rescheduled.\n\nNew Date & Time: '+stimeF+'\n\nThank you!';
-      window.open('https://wa.me/'+waNum+'?text='+encodeURIComponent(msg),'_blank');
-    }
-    setTimeout(function(){location.reload();},2000);
-  }
-}
-async function rescheduleVisitor(vid,vname){
-  var dt=prompt('New date/time (DD-MM-YYYY HH:MM):');
-  if(!dt)return;
-  var r=await fetch('/api/reschedule/'+vid,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reschedule_time:dt})});
-  var d=await r.json();
-  if(d.success){showNotif('&#128197; Meeting rescheduled to '+dt,8000);location.reload();}
-}
-function scheduleMeeting(){document.getElementById('sm-name').value='';document.getElementById('sm-phone').value='';document.getElementById('sm-wa').value='';document.getElementById('sm-purpose').value='';document.getElementById('sm-time').value='';document.getElementById('schedule-modal').classList.add('open');}
-function closeScheduleModal(){document.getElementById('schedule-modal').classList.remove('open');}
-async function submitSchedule(){
-  var vname=document.getElementById('sm-name').value.trim();
-  var vphone=document.getElementById('sm-phone').value.trim();
-  var vwa=document.getElementById('sm-wa').value.trim()||vphone;
-  var purpose=document.getElementById('sm-purpose').value.trim();
-  var stime=document.getElementById('sm-time').value;
-  if(!vname||!vphone||!purpose||!stime){alert('Please fill all fields!');return;}
-  var stimeF=stime.split('T')[0].split('-').reverse().join('-')+' '+stime.split('T')[1];
-  var r=await fetch('/api/schedule-meeting',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({visitor_name:vname,visitor_phone:vphone,visitor_wa:vwa,purpose:purpose,scheduled_time:stimeF})});
-  var d=await r.json();
-  if(d.success){
-    closeScheduleModal();
-    showNotif('&#128197; Meeting scheduled!',8000);
-    var waNum=vwa.replace(/[^0-9]/g,'');
-    if(waNum.length===10)waNum='91'+waNum;
-    var msg='Dear '+vname+',\n\nYour meeting has been scheduled at Maxwell Engineering Solutions.\n\nDate & Time: '+stimeF+'\n\nPlease fill your details before arriving:\n'+d.link+'\n\nThank you!';
-    window.open('https://wa.me/'+waNum+'?text='+encodeURIComponent(msg),'_blank');
-  }
-}
-function openSchedule(){document.getElementById('sm-name').value='';document.getElementById('sm-phone').value='';document.getElementById('sm-purpose').value='';document.getElementById('sm-time').value='';document.getElementById('schedule-modal').classList.add('open');}
-function closeSchedule(){document.getElementById('schedule-modal').classList.remove('open');}
-async function submitSchedule(){
-  var vname=document.getElementById('sm-name').value.trim();
-  var vphone=document.getElementById('sm-phone').value.trim();
-  var purpose=document.getElementById('sm-purpose').value.trim();
-  var stime=document.getElementById('sm-time').value;
-  if(!vname||!vphone||!purpose||!stime){alert('Please fill all fields!');return;}
-  var stimeF=stime.split('T')[0].split('-').reverse().join('-')+' '+stime.split('T')[1];
-  var r=await fetch('/api/schedule-meeting',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({visitor_name:vname,visitor_phone:vphone,purpose:purpose,scheduled_time:stimeF})});
-  var d=await r.json();
-  if(d.success){
-    closeSchedule();
-    showNotif('&#128197; Meeting scheduled!',8000);
-    var waNum=vphone.replace(/[^0-9]/g,'');if(waNum.length===10)waNum='91'+waNum;
-    var msg='Dear '+vname+',\n\nYour meeting has been scheduled at Maxwell Engineering Solutions.\n\nDate & Time: '+stimeF+'\n\nPlease fill your details before arriving:\n'+d.link+'\n\nThank you!';
-    window.open('https://wa.me/'+waNum+'?text='+encodeURIComponent(msg),'_blank');
-  }
-}
-function openReschedule(vid,vname,vphone){document.getElementById('rs-vid').value=vid;document.getElementById('rs-vname').textContent=vname;document.getElementById('rs-phone').value=vphone||'';document.getElementById('rs-time').value='';document.getElementById('reschedule-modal').classList.add('open');}
-function closeReschedule(){document.getElementById('reschedule-modal').classList.remove('open');}
-async function submitReschedule(){
-  var vid=document.getElementById('rs-vid').value;
-  var vphone=document.getElementById('rs-phone').value.trim();
-  var stime=document.getElementById('rs-time').value;
-  if(!stime){alert('Please select new date & time!');return;}
-  var stimeF=stime.split('T')[0].split('-').reverse().join('-')+' '+stime.split('T')[1];
-  var r=await fetch('/api/reschedule/'+vid,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reschedule_time:stimeF,visitor_phone:vphone})});
-  var d=await r.json();
-  if(d.success){
-    closeReschedule();
-    showNotif('&#128197; Meeting rescheduled!',8000);
-    var waNum=vphone.replace(/[^0-9]/g,'');if(waNum.length===10)waNum='91'+waNum;
-    if(waNum){var msg='Dear Visitor,\n\nYour meeting at Maxwell Engineering Solutions has been rescheduled.\n\nNew Date & Time: '+stimeF+'\n\nThank you!';window.open('https://wa.me/'+waNum+'?text='+encodeURIComponent(msg),'_blank');}
-    setTimeout(function(){location.reload();},2000);
-  }
-}
-async function checkNew(){try{var r0=await fetch('/api/latest-pending?host='+encodeURIComponent('""" + name + """'));var d0=await r0.json();if(_hwr&&d0.visitor&&d0.visitor.id>_lv){_beep(4);addNotifCount();showNotif('&#128276; New visitor: '+d0.visitor.name,15000);if(Notification.permission==='granted'){var n=new Notification('Maxwell - New Visitor',{body:d0.visitor.name+' aavya che!',icon:'/icon.png',vibrate:[300,100,300]});setTimeout(function(){n.close();},8000);}}if(d0.visitor)_lv=d0.visitor.id;_hwr=true;var r1=await fetch('/api/pending-count');var d1=await r1.json();document.title=d1.count>0?'('+d1.count+') Pending · """ + name + """':'""" + name + """ · Maxwell';}catch(e){}}
+async function checkNew(){try{var r0=await fetch('/api/latest-pending?host='+encodeURIComponent('""" + name + """'));var d0=await r0.json();if(_hwr&&d0.visitor&&d0.visitor.id>_lv){_beep(4);addNotifCount();showNotif('&#128276; New visitor: '+d0.visitor.name,15000);}if(d0.visitor)_lv=d0.visitor.id;_hwr=true;var r1=await fetch('/api/pending-count');var d1=await r1.json();document.title=d1.count>0?'('+d1.count+') Pending · """ + name + """':'""" + name + """ · Maxwell';}catch(e){}}
 if(Notification.permission==='default')Notification.requestPermission();
 setInterval(checkNew,8000);checkNew();
 setInterval(checkOrderReveal,15000);checkOrderReveal();
@@ -2037,6 +1692,7 @@ setInterval(checkOrderReveal,15000);checkOrderReveal();
 def employee_logout():
     session.clear()
     return redirect("/employee-login")
+
 
 @app.route("/change-password", methods=["GET", "POST"])
 def change_password():
@@ -2143,20 +1799,6 @@ def security_dashboard():
         pass_btn = ""
         if v["status"] == "approved":
             pass_btn = '<button class="btn bp" onclick="window.open(\'/pass/' + str(v["id"]) + '\')">&#128203; Pass</button>'
-        if v["status"] == "approved" and v.get("checkout_at") and not v.get("exit_at"):
-            pass_btn += '<button class="btn" onclick="securityExit(' + str(v["id"]) + ')" style="background:#E65100;color:white">&#128682; Exit</button>'
-        exit_time = v.get("exit_at") or "-"
-        diff_txt = ""
-        if v.get("checkout_at") and v.get("exit_at"):
-            try:
-                from datetime import datetime
-                fmt = "%d-%m-%Y %H:%M"
-                t1 = datetime.strptime(v["checkout_at"], fmt)
-                t2 = datetime.strptime(v["exit_at"], fmt)
-                mins = int((t2-t1).total_seconds()/60)
-                diff_txt = " (" + str(mins) + "m)"
-            except:
-                pass
         co = v.get("checkout_at") or "-"
         rows += ("<tr><td><img src='" + photo + "' style='width:38px;height:38px;border-radius:50%;object-fit:cover;border:2px solid #ddd'></td>"
                  "<td><strong>" + str(v["name"]) + "</strong></td>"
@@ -2165,7 +1807,6 @@ def security_dashboard():
                  "<td>" + str(v["person_to_meet"]) + "</td>"
                  "<td style='font-size:11px'>" + str(v["created_at"]) + "</td>"
                  "<td style='font-size:11px'>" + co + "</td>"
-                 "<td style='font-size:11px'>" + exit_time + diff_txt + "</td>"
                  "<td><span class='badge " + bc + "'>" + v["status"].upper() + "</span></td>"
                  "<td>" + pass_btn + "</td></tr>")
     if not rows:
@@ -2175,7 +1816,7 @@ def security_dashboard():
         '<div class="hdr-logo-wrap"><img src="' + LOGO_MAIN + '" class="hdr-logo" alt="Maxwell"></div>'
         '<div class="hdr-nav"><a href="/">Visitor Form</a><a href="/security-logout">Logout</a></div></div>')
 
-    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Security Dashboard</title><script src='https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js' defer></script><script>window.OneSignalDeferred=window.OneSignalDeferred||[];OneSignalDeferred.push(async function(OneSignal){await OneSignal.init({appId:'178ecef1-8423-4186-90cf-653b8301126c'});});</script>"
+    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Security Dashboard</title>"
             "<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial;background:#f0f4f8}"
             + HEADER_CSS +
             ".container{max-width:1100px;margin:20px auto;padding:0 15px}"
@@ -2196,7 +1837,7 @@ def security_dashboard():
             "<div class='container'>"
             "<div class='notif-banner' id='notif-banner'></div>"
             "<div class='card'><h3>&#128100; Visitor Entries</h3>"
-            "<table><tr><th>Photo</th><th>Name</th><th>Phone</th><th>Dept</th><th>Meeting</th><th>In Time</th><th>Host Out</th><th>Exit Time</th><th>Status</th><th>Action</th></tr>"
+            "<table><tr><th>Photo</th><th>Name</th><th>Phone</th><th>Dept</th><th>Meeting</th><th>In Time</th><th>Out Time</th><th>Status</th><th>Pass</th></tr>"
             + rows + "</table></div></div>"
             "<script>" + BEEP_JS +
             "var _lv=" + str(latest_id) + ",_co=" + str(latest_checkout_id) + ";"
@@ -2211,8 +1852,6 @@ def security_dashboard():
             "_beep(3);showNotif('&#128682; '+d2.checkout.name+' checked out',10000);"
             "_co=d2.checkout.id;}"
             "}catch(e){}}"
-            "async function securityExit(id){if(!confirm('Mark visitor as exited?'))return;var r=await fetch('/api/security-exit/'+id,{method:'POST'});var d=await r.json();if(d.success){showNotif('&#128682; Visitor exited'+(d.diff?' in '+d.diff:''),8000);setTimeout(function(){location.reload();},2000);}}"
-            "async function securityExit(id){if(!confirm('Mark visitor as exited?'))return;var r=await fetch('/api/security-exit/'+id,{method:'POST'});var d=await r.json();if(d.success){showNotif('&#128682; Visitor exited'+(d.diff?' in '+d.diff:''),8000);setTimeout(function(){location.reload();},2000);}}"
             "setInterval(checkNew,8000);checkNew();"
             "</script></body></html>")
 
