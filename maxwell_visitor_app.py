@@ -411,14 +411,15 @@ SOUND_WIDGET_PLACEHOLDER
       </div>
     </div>
     <div class="card">
-      <div class="section-title">&#128196; ID / Document Photo (Optional)</div>
+      <div class="section-title">&#128196; ID / Document Photo *</div>
       <div style="text-align:center;padding:8px 0">
         <span id="doc-icon" style="font-size:45px;color:#ddd;display:block;margin:6px 0">&#128196;</span>
         <img id="doc-preview" src="" alt="Document" style="max-width:100%;max-height:180px;border-radius:8px;border:2px solid #1565C0;display:none;margin:8px auto">
         <div style="margin-top:10px">
-          <label class="btn btn-blue" style="cursor:pointer">&#128190; Upload Document
+          <label class="btn btn-blue" style="cursor:pointer">&#128190; Upload
             <input type="file" id="doc-input" accept="image/*,application/pdf" style="display:none" onchange="handleDocUpload(this)">
           </label>
+          <button class="btn btn-blue" onclick="startDocCam()" id="doc-cam-btn">&#128247; Camera</button>
           <button class="btn btn-red" id="doc-ret-btn" onclick="removeDoc()" style="display:none">&#10005; Remove</button>
         </div>
         <div id="doc-name" style="font-size:12px;color:#888;margin-top:6px"></div>
@@ -488,6 +489,31 @@ function retake(){photoData=null;document.getElementById('photo-preview').style.
 var docData=null;
 function handleDocUpload(input){if(!input.files||!input.files[0])return;var file=input.files[0];document.getElementById('doc-name').textContent=file.name;var reader=new FileReader();reader.onload=function(e){docData=e.target.result;if(file.type.startsWith('image/')){document.getElementById('doc-preview').src=docData;document.getElementById('doc-preview').style.display='block';}else{document.getElementById('doc-preview').style.display='none';}document.getElementById('doc-icon').style.display='none';document.getElementById('doc-ret-btn').style.display='';};reader.readAsDataURL(file);}
 function removeDoc(){docData=null;document.getElementById('doc-preview').style.display='none';document.getElementById('doc-icon').style.display='block';document.getElementById('doc-ret-btn').style.display='none';document.getElementById('doc-name').textContent='';document.getElementById('doc-input').value='';}
+var docStream=null;
+function startDocCam(){
+  document.getElementById('doc-cam-btn').style.display='none';
+  var area=document.getElementById('doc-ret-btn').parentNode;
+  var v=document.createElement('video');v.autoplay=true;v.playsinline=true;
+  v.style.cssText='width:100%;max-width:300px;border-radius:8px;margin:8px auto;display:block';
+  var c=document.createElement('canvas');c.style.display='none';
+  var btn=document.createElement('button');btn.className='btn btn-green';
+  btn.innerHTML='&#10003; Capture';btn.style.margin='8px';
+  btn.onclick=function(){
+    c.width=v.videoWidth;c.height=v.videoHeight;
+    c.getContext('2d').drawImage(v,0,0);
+    docData=c.toDataURL('image/jpeg',0.8);
+    document.getElementById('doc-preview').src=docData;
+    document.getElementById('doc-preview').style.display='block';
+    document.getElementById('doc-icon').style.display='none';
+    document.getElementById('doc-ret-btn').style.display='';
+    if(docStream)docStream.getTracks().forEach(function(t){t.stop();});
+    v.remove();c.remove();btn.remove();
+    document.getElementById('doc-cam-btn').style.display='';
+  };
+  navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}})
+    .then(function(s){docStream=s;v.srcObject=s;area.appendChild(v);area.appendChild(c);area.appendChild(btn);})
+    .catch(function(){alert('Camera not available!');document.getElementById('doc-cam-btn').style.display='';});
+}
 function showAlert(msg){document.getElementById('alert-box').innerHTML='<div class="alert alert-error">'+msg+'</div>';setTimeout(function(){document.getElementById('alert-box').innerHTML='';},5000);}
 async function submitForm(){
   var name=document.getElementById('v-name').value.trim();
@@ -503,7 +529,7 @@ async function submitForm(){
   if(!company){showAlert('Please enter company/organization!');return;}
   if(!purpose){showAlert('Please enter purpose!');return;}
   if(!cat){showAlert('Please select visitor category!');return;}
-  if(!person){showAlert('Please select person to meet!');return;}
+  if(!person){showAlert('Please select person to meet!');return;}if(!docData){showAlert('Please upload or capture ID/Document photo!');return;}
   try{
     var res=await fetch('/api/visitor',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({name:name,phone:phone,purpose:purpose,host_name:host,company:company,category:cat,department:dept,person_to_meet:person,photo:photoData,doc_photo:docData})});
@@ -1586,7 +1612,7 @@ def employee_dashboard():
             <div class="pi-actions">
                 <button class="pi-approve" onclick="act({vid},'approve')">&#10003;</button>
                 <button class="pi-reject" onclick="act({vid},'reject')">&#10007;</button>
-                <button class="pi-reschedule" onclick="rescheduleVisitor({vid},'{name_r}')" title="Reschedule">&#128197;</button>
+                <button class="pi-reschedule" onclick="openRescheduleModal('{vid}','{name_r}','')" title="Reschedule">&#128197;</button>
             </div>
         </div>""".format(
             vid=vid, photo=photo, name=v["name"],
@@ -1770,6 +1796,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-s
     """ + hist_items + """
 </div>
 </div>
+<div class="modal-overlay" id="reschedule-modal">
+    <div class="profile-modal">
+        <div class="modal-title">&#128197; Reschedule Meeting</div>
+        <input type="hidden" id="rs-vid">
+        <div style="text-align:center;font-size:14px;font-weight:700;color:#1565C0;margin-bottom:16px">Visitor: <span id="rs-name"></span></div>
+        <div class="form-group"><label>Visitor WhatsApp Number</label><input type="tel" id="rs-phone" placeholder="For sending WhatsApp notification"></div>
+        <div class="form-group"><label>New Date & Time *</label><input type="datetime-local" id="rs-time"></div>
+        <button class="save-btn" onclick="submitReschedule()">&#128247; Reschedule &amp; Send WhatsApp</button>
+        <button class="close-modal" onclick="closeRescheduleModal()">Cancel</button>
+    </div>
+</div>
 <div class="modal-overlay" id="schedule-modal">
     <div class="profile-modal">
         <div class="modal-title">&#128197; Schedule Meeting</div>
@@ -1807,7 +1844,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-s
     <button class="nav-item active" onclick="scrollTo(0,0)"><div class="nav-icon">&#127968;</div><span>Dashboard</span></button>
     <button class="nav-item" onclick="switchToVisitors()"><div class="nav-icon">&#128101;</div><span>Visitors</span></button>
     <button class="nav-item" onclick="location.href='/pantry'"><div class="nav-icon">&#9749;</div><span>Pantry</span></button>
-    <button class="nav-item" onclick="location.href='/'"><div class="nav-icon">&#128203;</div><span>Form</span></button>
+    <button class="nav-item" onclick="scheduleMeeting()"><div class="nav-icon">&#128197;</div><span>Schedule</span></button>
     <button class="nav-item" onclick="openProfile()"><div class="nav-icon">&#128100;</div><span>Profile</span></button>
 </nav>
 <script>
@@ -1830,6 +1867,34 @@ function openProfile(){document.getElementById('profile-modal').classList.add('o
 function closeProfile(){document.getElementById('profile-modal').classList.remove('open');_newPhotoData=null;}
 function handlePhotoChange(input){if(!input.files||!input.files[0])return;var reader=new FileReader();reader.onload=function(e){_newPhotoData=e.target.result;document.getElementById('modal-profile-img').src=_newPhotoData;document.getElementById('hdr-profile-img').src=_newPhotoData;};reader.readAsDataURL(input.files[0]);}
 async function saveProfile(){var name=document.getElementById('p-name').value.trim();var dept=document.getElementById('p-dept').value.trim();var desig=document.getElementById('p-desig').value.trim();var payload={name:name,department:dept,designation:desig};if(_newPhotoData)payload.photo=_newPhotoData;var r=await fetch('/api/profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});var d=await r.json();if(d.success){showNotif('&#10003; Profile saved!',4000);closeProfile();}else{alert('Error saving profile!');}}
+function openRescheduleModal(vid,vname,vphone){
+  document.getElementById('rs-vid').value=vid;
+  document.getElementById('rs-name').textContent=vname;
+  document.getElementById('rs-phone').value=vphone||'';
+  document.getElementById('rs-time').value='';
+  document.getElementById('reschedule-modal').classList.add('open');
+}
+function closeRescheduleModal(){document.getElementById('reschedule-modal').classList.remove('open');}
+async function submitReschedule(){
+  var vid=document.getElementById('rs-vid').value;
+  var vphone=document.getElementById('rs-phone').value;
+  var stime=document.getElementById('rs-time').value;
+  if(!stime){alert('Please select date & time!');return;}
+  var stimeF=stime.split('T')[0].split('-').reverse().join('-')+' '+stime.split('T')[1];
+  var r=await fetch('/api/reschedule/'+vid,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reschedule_time:stimeF})});
+  var d=await r.json();
+  if(d.success){
+    closeRescheduleModal();
+    showNotif('&#128197; Meeting rescheduled!',8000);
+    var waNum=vphone.replace(/[^0-9]/g,'');
+    if(waNum.length===10)waNum='91'+waNum;
+    if(waNum){
+      var msg='Dear Visitor,\n\nYour meeting at Maxwell Engineering Solutions has been rescheduled.\n\nNew Date & Time: '+stimeF+'\n\nThank you!';
+      window.open('https://wa.me/'+waNum+'?text='+encodeURIComponent(msg),'_blank');
+    }
+    setTimeout(function(){location.reload();},2000);
+  }
+}
 async function rescheduleVisitor(vid,vname){
   var dt=prompt('New date/time (DD-MM-YYYY HH:MM):');
   if(!dt)return;
@@ -1837,7 +1902,7 @@ async function rescheduleVisitor(vid,vname){
   var d=await r.json();
   if(d.success){showNotif('&#128197; Meeting rescheduled to '+dt,8000);location.reload();}
 }
-function scheduleMeeting(){document.getElementById('schedule-modal').classList.add('open');}
+function scheduleMeeting(){document.getElementById('sm-name').value='';document.getElementById('sm-phone').value='';document.getElementById('sm-wa').value='';document.getElementById('sm-purpose').value='';document.getElementById('sm-time').value='';document.getElementById('schedule-modal').classList.add('open');}
 function closeScheduleModal(){document.getElementById('schedule-modal').classList.remove('open');}
 async function submitSchedule(){
   var vname=document.getElementById('sm-name').value.trim();
