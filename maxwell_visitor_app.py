@@ -1909,6 +1909,7 @@ def security_exit(vid):
     conn.commit()
     conn.close()
     return jsonify({"success": True, "exit_at": now})
+    
     @app.route("/api/schedule-meeting", methods=["POST"])
     def schedule_meeting_api():
     if not session.get("emp_name"):
