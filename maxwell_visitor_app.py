@@ -1908,10 +1908,9 @@ def security_exit(vid):
     conn.execute("UPDATE visitors SET exit_at=? WHERE id=?", (now, vid))
     conn.commit()
     conn.close()
-    return jsonify({"success": True, "exit_at": now})
-    
-   @app.route("/api/schedule-meeting", methods=["POST"])
-def schedule_meeting_api():
+    return jsonify({"success": True, "exit_at": now}) 
+    @app.route("/api/schedule-meeting", methods=["POST"])
+    def schedule_meeting_api():
     if not session.get("emp_name"):
         return jsonify({"error": "Not logged in"}), 401
     data = request.get_json()
