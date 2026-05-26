@@ -1032,10 +1032,7 @@ def admin():
             "var r3=await fetch('/api/checkout-notify');var d3=await r3.json();"
             "if(d3.checkout&&d3.checkout.id>_co){_beep(3);showNotif('&#128682; '+d3.checkout.name+' checked out',10000);_co=d3.checkout.id;}"
             "}catch(e){}}"
-            "if(Notification.permission==='default'){Notification.requestPermission();}"
-            "setInterval(_chkNew,8000);_chkNew();"
-            "setInterval(checkAdminOrders,15000);checkAdminOrders();"
-            "</script>"
+            "if(Notification.permission==='default'){Notification.requestPermission();}setInterval(_chkNew,8000);_chkNew();setInterval(checkAdminOrders,15000);checkAdminOrders();</script>"
             + SOUND_WIDGET +
             "</body></html>")
 
