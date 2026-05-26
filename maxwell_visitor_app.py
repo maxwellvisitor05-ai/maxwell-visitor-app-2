@@ -1846,9 +1846,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-s
     <button class="nav-item" onclick="scheduleMeeting()"><div class="nav-icon">&#128197;</div><span>Schedule</span></button>
     <button class="nav-item" onclick="openProfile()"><div class="nav-icon">&#128100;</div><span>Profile</span></button>
 </nav>
+""" + SOUND_WIDGET + """
 <script>
 """ + BEEP_JS + """
-""" + SOUND_WIDGET + """
+
 var _qty={},_lv=""" + str(latest_hp_id) + """,_hwr=true,_notifCount=0,_oc=0;
 var _vt=""" + json.dumps(visitor_times) + """;
 var _reminded={};var _newPhotoData=null;
