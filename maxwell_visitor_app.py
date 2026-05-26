@@ -132,7 +132,8 @@ BEEP_JS = (
     "catch(e){}}"
     "var _soundEnabled=false;"
     "function _enableSound(){"
-    "if(_audioCtx)_audioCtx.resume();"
+    "try{if(!_audioCtx){_audioCtx=new(window.AudioContext||window.webkitAudioContext)();}"
+    "if(_audioCtx&&_audioCtx.state==='suspended'){_audioCtx.resume();}"
     "_soundEnabled=true;"
     "var b=document.getElementById('snd-btn');if(b)b.style.display='none';"
     "var ok=document.getElementById('snd-ok');"
@@ -184,9 +185,16 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT, phone TEXT, purpose TEXT, host_name TEXT,
         category TEXT, department TEXT, person_to_meet TEXT,
-        photo TEXT, status TEXT DEFAULT 'pending',
-        created_at TEXT, checkout_at TEXT, pass_number TEXT,
-        advance_token TEXT
+        photo TEXT, doc_photo TEXT, status TEXT DEFAULT 'pending',
+        created_at TEXT, checkout_at TEXT, exit_at TEXT, pass_number TEXT,
+        advance_token TEXT, scheduled_time TEXT, reschedule_time TEXT
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS scheduled_meetings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        visitor_name TEXT, visitor_phone TEXT, purpose TEXT,
+        person_to_meet TEXT, department TEXT, category TEXT,
+        scheduled_time TEXT, status TEXT DEFAULT 'pending',
+        created_at TEXT, token TEXT
     )""")
     conn.execute("""CREATE TABLE IF NOT EXISTS pantry_orders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -212,7 +220,7 @@ def init_db():
         key TEXT PRIMARY KEY,
         value TEXT
     )""")
-    for col in ["checkout_at TEXT", "advance_token TEXT"]:
+    for col in ["checkout_at TEXT", "advance_token TEXT", "exit_at TEXT", "doc_photo TEXT", "scheduled_time TEXT", "reschedule_time TEXT"]:
         try:
             conn.execute("ALTER TABLE visitors ADD COLUMN {}".format(col))
         except:
@@ -305,6 +313,15 @@ def build_visitor_form(prefill):
     html = """<!DOCTYPE html><html lang="en"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Maxwell - Visitor Management</title>
+<script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
+<script>
+  window.OneSignalDeferred = window.OneSignalDeferred || [];
+  OneSignalDeferred.push(async function(OneSignal) {
+    await OneSignal.init({
+      appId: "178ecef1-8423-4186-90cf-653b8301126c",
+    });
+  });
+</script>
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#1565C0">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -498,9 +515,9 @@ def create_visitor():
     c.execute("SELECT COUNT(*) FROM visitors")
     count = c.fetchone()[0] + 1
     pass_num = "MW-" + datetime.now().strftime("%Y%m%d") + "-" + str(count).zfill(4)
-    c.execute("INSERT INTO visitors (name,phone,purpose,host_name,category,department,person_to_meet,photo,created_at,pass_number) VALUES (?,?,?,?,?,?,?,?,?,?)",
+    c.execute("INSERT INTO visitors (name,phone,purpose,host_name,category,department,person_to_meet,photo,doc_photo,created_at,pass_number) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
               (data.get("name"), data.get("phone"), data.get("purpose"), data.get("host_name"),
-               data.get("category"), data.get("department"), data.get("person_to_meet"), data.get("photo"), now, pass_num))
+               data.get("category"), data.get("department"), data.get("person_to_meet"), data.get("photo"), data.get("doc_photo"), now, pass_num))
     conn.commit()
     conn.close()
     return jsonify({"success": True})
@@ -579,6 +596,27 @@ def checkout_visitor(vid):
     conn.commit()
     conn.close()
     return jsonify({"success": True, "checkout_at": now})
+
+@app.route("/api/security-exit/<int:vid>", methods=["POST"])
+def security_exit(vid):
+    now = get_ist()
+    conn = get_db()
+    conn.execute("UPDATE visitors SET exit_at=? WHERE id=?", (now, vid))
+    conn.commit()
+    v = dict(conn.execute("SELECT checkout_at,exit_at FROM visitors WHERE id=?", (vid,)).fetchone())
+    conn.close()
+    diff = ""
+    if v.get("checkout_at") and v.get("exit_at"):
+        try:
+            from datetime import datetime
+            fmt = "%d-%m-%Y %H:%M"
+            t1 = datetime.strptime(v["checkout_at"], fmt)
+            t2 = datetime.strptime(v["exit_at"], fmt)
+            mins = int((t2-t1).total_seconds()/60)
+            diff = str(mins) + " min"
+        except:
+            diff = ""
+    return jsonify({"success": True, "exit_at": now, "diff": diff})
 
 @app.route("/api/beverage", methods=["POST"])
 def order_beverage():
@@ -840,7 +878,7 @@ def admin():
         '<a href="/admin-logout">Logout</a>'
         '</div></div>')
 
-    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Maxwell Admin</title>"
+    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Maxwell Admin</title><script src='https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js' defer></script><script>window.OneSignalDeferred=window.OneSignalDeferred||[];OneSignalDeferred.push(async function(OneSignal){await OneSignal.init({appId:'178ecef1-8423-4186-90cf-653b8301126c'});});</script>"
             "<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial;background:#f0f4f8}"
             + HEADER_CSS +
             ".header h1{display:none}"
@@ -1106,6 +1144,55 @@ def export_excel():
 
 
 # ══════════════════════════════════════════════════
+# SCHEDULED MEETINGS
+# ══════════════════════════════════════════════════
+@app.route("/api/schedule-meeting", methods=["POST"])
+def schedule_meeting():
+    if not session.get("emp_name"):
+        return jsonify({"error": "Not logged in"}), 401
+    data = request.get_json()
+    now = get_ist()
+    import secrets
+    token = secrets.token_urlsafe(16)
+    conn = get_db()
+    conn.execute("INSERT INTO scheduled_meetings (visitor_name,visitor_phone,purpose,person_to_meet,department,category,scheduled_time,created_at,token) VALUES (?,?,?,?,?,?,?,?,?)",
+        (data.get("visitor_name"), data.get("visitor_phone"), data.get("purpose"),
+         session["emp_name"], data.get("department","Staff Visit"), data.get("category","Staff Visit"),
+         data.get("scheduled_time"), now, token))
+    conn.commit()
+    conn.close()
+    base_url = "https://maxwell-visitor-app-2.onrender.com"
+    link = base_url + "/scheduled-form/" + token
+    return jsonify({"success": True, "link": link, "token": token})
+
+@app.route("/scheduled-form/<token>")
+def scheduled_form(token):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM scheduled_meetings WHERE token=?", (token,)).fetchone()
+    conn.close()
+    if not row:
+        return "<h2 style='text-align:center;margin-top:80px;font-family:Arial;color:#C62828'>Invalid or expired link.</h2>"
+    m = dict(row)
+    return build_visitor_form({
+        "name": m["visitor_name"],
+        "phone": m["visitor_phone"],
+        "purpose": m["purpose"],
+        "person_to_meet": m["person_to_meet"],
+        "prefill": True
+    })
+
+@app.route("/api/reschedule/<int:vid>", methods=["POST"])
+def reschedule_visitor(vid):
+    data = request.get_json()
+    new_time = data.get("reschedule_time", "")
+    conn = get_db()
+    conn.execute("UPDATE visitors SET reschedule_time=?, status='rescheduled' WHERE id=?", (new_time, vid))
+    v = dict(conn.execute("SELECT * FROM visitors WHERE id=?", (vid,)).fetchone())
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True, "visitor": v, "new_time": new_time})
+
+# ══════════════════════════════════════════════════
 # PANTRY
 # ══════════════════════════════════════════════════
 @app.route("/pantry-login", methods=["GET", "POST"])
@@ -1155,7 +1242,25 @@ def pantry():
         drink_info = str(o.get("drink", "") or "-")
         qty = str(o.get("quantity", ""))
         snacks_info = str(o.get("snacks", "")) if o.get("snacks") else "-"
-        note_info = str(o.get("note", "") or "-")
+        raw_note = str(o.get("note", "") or "")
+        # Translate note to Gujarati using simple word mapping
+        guj_note = raw_note
+        sugar_map = {
+            "with sugar": "ખાંડ સાથે",
+            "without sugar": "ખાંડ વગર",
+            "no sugar": "ખાંડ નહી",
+            "less sugar": "ઓછી ખાંડ",
+            "more sugar": "વધુ ખાંડ",
+            "with milk": "દૂધ સાથે",
+            "without milk": "દૂધ વગર",
+            "strong": "કડક",
+            "light": "હળવો",
+            "hot": "ગરમ",
+            "cold": "ઠંડો",
+        }
+        for eng, guj in sugar_map.items():
+            guj_note = guj_note.replace(eng, guj)
+        note_info = (raw_note + " | " + guj_note) if guj_note != raw_note and raw_note else (raw_note or "-")
 
         speak_parts = []
         if o.get("drink") and o["drink"] != "-":
@@ -1201,7 +1306,7 @@ def pantry():
         '<div class="hdr-logo-wrap"><img src="' + LOGO_MAIN + '" class="hdr-logo" alt="Maxwell"></div>'
         '<div class="hdr-nav"><a href="/admin">Admin</a><a href="/pantry-logout">Logout</a></div></div>')
 
-    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Pantry Dashboard</title>"
+    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Pantry Dashboard</title><script src='https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js' defer></script><script>window.OneSignalDeferred=window.OneSignalDeferred||[];OneSignalDeferred.push(async function(OneSignal){await OneSignal.init({appId:'178ecef1-8423-4186-90cf-653b8301126c'});});</script>"
             "<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial;background:#f0f4f8}"
             + HEADER_CSS +
             ".container{max-width:1050px;margin:20px auto;padding:0 15px}"
@@ -1257,7 +1362,7 @@ def pantry():
             "if(gv)u.voice=gv;window.speechSynthesis.speak(u);}"
             "async function checkOrders(){try{"
             "var r=await fetch('/api/pantry-pending');var d=await r.json();"
-            "if(_pc>0&&d.count>_pc){_enableSound();_beep(5);if(navigator.vibrate)navigator.vibrate([300,100,300,100,300]);document.body.style.background='#FFF3E0';setTimeout(function(){document.body.style.background='#f0f4f8';},1000);"
+            "if(_pc>0&&d.count>_pc){_beep(5);if(navigator.vibrate)navigator.vibrate([300,100,300,100,300]);document.body.style.background='#FFF3E0';setTimeout(function(){document.body.style.background='#f0f4f8';},1000);"
             "document.getElementById('notif-banner').style.display='block';"
             "setTimeout(function(){document.getElementById('notif-banner').style.display='none';},10000);"
             "location.reload();}"
@@ -1462,11 +1567,13 @@ def employee_dashboard():
             <div class="pi-actions">
                 <button class="pi-approve" onclick="act({vid},'approve')">&#10003;</button>
                 <button class="pi-reject" onclick="act({vid},'reject')">&#10007;</button>
+                <button class="pi-reschedule" onclick="rescheduleVisitor({vid},'{name_r}')" title="Reschedule">&#128197;</button>
             </div>
         </div>""".format(
             vid=vid, photo=photo, name=v["name"],
             dept=v["department"] + " · " + v["purpose"][:25],
-            time=v["created_at"]
+            time=v["created_at"],
+            name_r=v["name"].replace("'","")
         )
     if not pending_cards:
         pending_cards = '<div class="empty-state small"><div class="es-icon">&#10003;</div><div class="es-text">No pending requests</div></div>'
@@ -1498,6 +1605,15 @@ def employee_dashboard():
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>""" + name + """ · Maxwell</title>
+<script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
+<script>
+  window.OneSignalDeferred = window.OneSignalDeferred || [];
+  OneSignalDeferred.push(async function(OneSignal) {
+    await OneSignal.init({
+      appId: "178ecef1-8423-4186-90cf-653b8301126c",
+    });
+  });
+</script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;background:#F2F4F7;min-height:100vh;padding-bottom:90px;color:#1A1A2E}
@@ -1555,6 +1671,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-s
 .pi-actions{display:flex;gap:6px;flex-shrink:0}
 .pi-approve{width:34px;height:34px;background:#E8F5E9;color:#2E7D32;border:none;border-radius:50%;font-size:16px;font-weight:700;cursor:pointer}
 .pi-reject{width:34px;height:34px;background:#FFEBEE;color:#C62828;border:none;border-radius:50%;font-size:16px;font-weight:700;cursor:pointer}
+.pi-reschedule{width:34px;height:34px;background:#E3F2FD;color:#1565C0;border:none;border-radius:50%;font-size:16px;cursor:pointer}
 .hist-row{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid #F5F5F5}
 .hist-row:last-child{border-bottom:none}
 .hist-av{width:40px;height:40px;border-radius:50%;color:white;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;flex-shrink:0}
@@ -1653,6 +1770,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-s
         <button onclick="location.href='/employee-logout'" style="width:100%;padding:12px;background:#FFEBEE;color:#C62828;border:1.5px solid #EF9A9A;border-radius:12px;font-size:14px;font-weight:700;cursor:pointer;margin-top:8px">&#128682; Logout</button>
     </div>
 </div>
+<button onclick="scheduleMeeting()" style="position:fixed;bottom:155px;right:18px;width:54px;height:54px;background:linear-gradient(135deg,#2E7D32,#388E3C);border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 20px rgba(46,125,50,0.45);cursor:pointer;z-index:150;border:none;color:white;font-size:22px" title="Schedule Meeting">&#128197;</button>
 <a href="/" class="fab">+</a>
 <nav class="bottom-nav">
     <button class="nav-item active" onclick="scrollTo(0,0)"><div class="nav-icon">&#127968;</div><span>Dashboard</span></button>
@@ -1681,7 +1799,30 @@ function openProfile(){document.getElementById('profile-modal').classList.add('o
 function closeProfile(){document.getElementById('profile-modal').classList.remove('open');_newPhotoData=null;}
 function handlePhotoChange(input){if(!input.files||!input.files[0])return;var reader=new FileReader();reader.onload=function(e){_newPhotoData=e.target.result;document.getElementById('modal-profile-img').src=_newPhotoData;document.getElementById('hdr-profile-img').src=_newPhotoData;};reader.readAsDataURL(input.files[0]);}
 async function saveProfile(){var name=document.getElementById('p-name').value.trim();var dept=document.getElementById('p-dept').value.trim();var desig=document.getElementById('p-desig').value.trim();var payload={name:name,department:dept,designation:desig};if(_newPhotoData)payload.photo=_newPhotoData;var r=await fetch('/api/profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});var d=await r.json();if(d.success){showNotif('&#10003; Profile saved!',4000);closeProfile();}else{alert('Error saving profile!');}}
-async function checkNew(){try{var r0=await fetch('/api/latest-pending?host='+encodeURIComponent('""" + name + """'));var d0=await r0.json();if(_hwr&&d0.visitor&&d0.visitor.id>_lv){_beep(4);addNotifCount();showNotif('&#128276; New visitor: '+d0.visitor.name,15000);}if(d0.visitor)_lv=d0.visitor.id;_hwr=true;var r1=await fetch('/api/pending-count');var d1=await r1.json();document.title=d1.count>0?'('+d1.count+') Pending · """ + name + """':'""" + name + """ · Maxwell';}catch(e){}}
+async function rescheduleVisitor(vid,vname){
+  var dt=prompt('Enter new date and time for '+vname+' (DD-MM-YYYY HH:MM):');
+  if(!dt)return;
+  var r=await fetch('/api/reschedule/'+vid,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reschedule_time:dt})});
+  var d=await r.json();
+  if(d.success){showNotif('&#128197; Meeting rescheduled to '+dt,8000);location.reload();}
+}
+async function scheduleMeeting(){
+  var vname=prompt('Visitor Name:');if(!vname)return;
+  var vphone=prompt('Visitor Phone:');if(!vphone)return;
+  var purpose=prompt('Purpose of Visit:');if(!purpose)return;
+  var stime=prompt('Scheduled Date & Time (DD-MM-YYYY HH:MM):');if(!stime)return;
+  var r=await fetch('/api/schedule-meeting',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({visitor_name:vname,visitor_phone:vphone,purpose:purpose,scheduled_time:stime})});
+  var d=await r.json();
+  if(d.success){
+    showNotif('&#128197; Meeting scheduled! Link: '+d.link,15000);
+    if(navigator.clipboard)navigator.clipboard.writeText(d.link);
+    alert('Meeting link copied!\n\n'+d.link+'\n\nShare this link with visitor via WhatsApp/SMS');
+  }
+}
+async function checkNew(){try{var r0=await fetch('/api/latest-pending?host='+encodeURIComponent('""" + name + """'));var d0=await r0.json();if(_hwr&&d0.visitor&&d0.visitor.id>_lv){_beep(4);addNotifCount();showNotif('&#128276; New visitor: '+d0.visitor.name,15000);
+if(Notification.permission==='granted'){var n=new Notification('Maxwell - New Visitor',{body:d0.visitor.name+' aavya che!',icon:'/icon.png',vibrate:[300,100,300]});setTimeout(function(){n.close();},8000);}
+}if(d0.visitor)_lv=d0.visitor.id;_hwr=true;var r1=await fetch('/api/pending-count');var d1=await r1.json();document.title=d1.count>0?'('+d1.count+') Pending · """ + name + """':'""" + name + """ · Maxwell';}catch(e){}}
 if(Notification.permission==='default')Notification.requestPermission();
 setInterval(checkNew,8000);checkNew();
 setInterval(checkOrderReveal,15000);checkOrderReveal();
@@ -1799,6 +1940,20 @@ def security_dashboard():
         pass_btn = ""
         if v["status"] == "approved":
             pass_btn = '<button class="btn bp" onclick="window.open(\'/pass/' + str(v["id"]) + '\')">&#128203; Pass</button>'
+        if v["status"] == "approved" and v.get("checkout_at") and not v.get("exit_at"):
+            pass_btn += '<button class="btn" onclick="securityExit(' + str(v["id"]) + ')" style="background:#E65100;color:white">&#128682; Exit</button>'
+        exit_time = v.get("exit_at") or "-"
+        diff_txt = ""
+        if v.get("checkout_at") and v.get("exit_at"):
+            try:
+                from datetime import datetime
+                fmt = "%d-%m-%Y %H:%M"
+                t1 = datetime.strptime(v["checkout_at"], fmt)
+                t2 = datetime.strptime(v["exit_at"], fmt)
+                mins = int((t2-t1).total_seconds()/60)
+                diff_txt = " (" + str(mins) + "m)"
+            except:
+                pass
         co = v.get("checkout_at") or "-"
         rows += ("<tr><td><img src='" + photo + "' style='width:38px;height:38px;border-radius:50%;object-fit:cover;border:2px solid #ddd'></td>"
                  "<td><strong>" + str(v["name"]) + "</strong></td>"
@@ -1807,6 +1962,7 @@ def security_dashboard():
                  "<td>" + str(v["person_to_meet"]) + "</td>"
                  "<td style='font-size:11px'>" + str(v["created_at"]) + "</td>"
                  "<td style='font-size:11px'>" + co + "</td>"
+                 "<td style='font-size:11px'>" + exit_time + diff_txt + "</td>"
                  "<td><span class='badge " + bc + "'>" + v["status"].upper() + "</span></td>"
                  "<td>" + pass_btn + "</td></tr>")
     if not rows:
@@ -1816,7 +1972,7 @@ def security_dashboard():
         '<div class="hdr-logo-wrap"><img src="' + LOGO_MAIN + '" class="hdr-logo" alt="Maxwell"></div>'
         '<div class="hdr-nav"><a href="/">Visitor Form</a><a href="/security-logout">Logout</a></div></div>')
 
-    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Security Dashboard</title>"
+    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Security Dashboard</title><script src='https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js' defer></script><script>window.OneSignalDeferred=window.OneSignalDeferred||[];OneSignalDeferred.push(async function(OneSignal){await OneSignal.init({appId:'178ecef1-8423-4186-90cf-653b8301126c'});});</script>"
             "<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial;background:#f0f4f8}"
             + HEADER_CSS +
             ".container{max-width:1100px;margin:20px auto;padding:0 15px}"
@@ -1837,7 +1993,7 @@ def security_dashboard():
             "<div class='container'>"
             "<div class='notif-banner' id='notif-banner'></div>"
             "<div class='card'><h3>&#128100; Visitor Entries</h3>"
-            "<table><tr><th>Photo</th><th>Name</th><th>Phone</th><th>Dept</th><th>Meeting</th><th>In Time</th><th>Out Time</th><th>Status</th><th>Pass</th></tr>"
+            "<table><tr><th>Photo</th><th>Name</th><th>Phone</th><th>Dept</th><th>Meeting</th><th>In Time</th><th>Host Out</th><th>Exit Time</th><th>Status</th><th>Action</th></tr>"
             + rows + "</table></div></div>"
             "<script>" + BEEP_JS +
             "var _lv=" + str(latest_id) + ",_co=" + str(latest_checkout_id) + ";"
@@ -1852,6 +2008,7 @@ def security_dashboard():
             "_beep(3);showNotif('&#128682; '+d2.checkout.name+' checked out',10000);"
             "_co=d2.checkout.id;}"
             "}catch(e){}}"
+            "async function securityExit(id){if(!confirm('Mark visitor as exited?'))return;var r=await fetch('/api/security-exit/'+id,{method:'POST'});var d=await r.json();if(d.success){showNotif('&#128682; Visitor exited'+(d.diff?' in '+d.diff:''),8000);setTimeout(function(){location.reload();},2000);}}"
             "setInterval(checkNew,8000);checkNew();"
             "</script></body></html>")
 
