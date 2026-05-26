@@ -410,6 +410,20 @@ SOUND_WIDGET_PLACEHOLDER
         </div>
       </div>
     </div>
+    <div class="card">
+      <div class="section-title">&#128196; ID / Document Photo (Optional)</div>
+      <div style="text-align:center;padding:8px 0">
+        <span id="doc-icon" style="font-size:45px;color:#ddd;display:block;margin:6px 0">&#128196;</span>
+        <img id="doc-preview" src="" alt="Document" style="max-width:100%;max-height:180px;border-radius:8px;border:2px solid #1565C0;display:none;margin:8px auto">
+        <div style="margin-top:10px">
+          <label class="btn btn-blue" style="cursor:pointer">&#128190; Upload Document
+            <input type="file" id="doc-input" accept="image/*,application/pdf" style="display:none" onchange="handleDocUpload(this)">
+          </label>
+          <button class="btn btn-red" id="doc-ret-btn" onclick="removeDoc()" style="display:none">&#10005; Remove</button>
+        </div>
+        <div id="doc-name" style="font-size:12px;color:#888;margin-top:6px"></div>
+      </div>
+    </div>
     <button class="submit-btn" onclick="submitForm()">SUBMIT</button>
   </div>
   <div id="submitted-section" class="hidden">
@@ -471,6 +485,9 @@ function capPhoto(){
   document.getElementById('ret-btn').style.display='';if(camStream)camStream.getTracks().forEach(function(t){t.stop();});
 }
 function retake(){photoData=null;document.getElementById('photo-preview').style.display='none';document.getElementById('ret-btn').style.display='none';document.getElementById('ph-icon').style.display='block';startCam();}
+var docData=null;
+function handleDocUpload(input){if(!input.files||!input.files[0])return;var file=input.files[0];document.getElementById('doc-name').textContent=file.name;var reader=new FileReader();reader.onload=function(e){docData=e.target.result;if(file.type.startsWith('image/')){document.getElementById('doc-preview').src=docData;document.getElementById('doc-preview').style.display='block';}else{document.getElementById('doc-preview').style.display='none';}document.getElementById('doc-icon').style.display='none';document.getElementById('doc-ret-btn').style.display='';};reader.readAsDataURL(file);}
+function removeDoc(){docData=null;document.getElementById('doc-preview').style.display='none';document.getElementById('doc-icon').style.display='block';document.getElementById('doc-ret-btn').style.display='none';document.getElementById('doc-name').textContent='';document.getElementById('doc-input').value='';}
 function showAlert(msg){document.getElementById('alert-box').innerHTML='<div class="alert alert-error">'+msg+'</div>';setTimeout(function(){document.getElementById('alert-box').innerHTML='';},5000);}
 async function submitForm(){
   var name=document.getElementById('v-name').value.trim();
@@ -489,7 +506,7 @@ async function submitForm(){
   if(!person){showAlert('Please select person to meet!');return;}
   try{
     var res=await fetch('/api/visitor',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({name:name,phone:phone,purpose:purpose,host_name:host,company:company,category:cat,department:dept,person_to_meet:person,photo:photoData})});
+      body:JSON.stringify({name:name,phone:phone,purpose:purpose,host_name:host,company:company,category:cat,department:dept,person_to_meet:person,photo:photoData,doc_photo:docData})});
     var data=await res.json();
     if(data.success){document.getElementById('form-section').classList.add('hidden');document.getElementById('submitted-section').classList.remove('hidden');}
     else{showAlert('Error: '+(data.error||'Unknown error'));}
@@ -1815,9 +1832,13 @@ async function scheduleMeeting(){
     body:JSON.stringify({visitor_name:vname,visitor_phone:vphone,purpose:purpose,scheduled_time:stime})});
   var d=await r.json();
   if(d.success){
-    showNotif('&#128197; Meeting scheduled! Link: '+d.link,15000);
     if(navigator.clipboard)navigator.clipboard.writeText(d.link);
-    alert('Meeting link copied!\n\n'+d.link+'\n\nShare this link with visitor via WhatsApp/SMS');
+    var waNum=vphone.replace(/[^0-9]/g,'');
+    if(waNum.length===10)waNum='91'+waNum;
+    var waMsg=encodeURIComponent('Dear '+vname+',\n\nYour meeting has been scheduled at Maxwell Engineering Solutions.\n\nDate & Time: '+stime+'\n\nPlease fill your details before arriving:\n'+d.link+'\n\nThank you!');
+    var waUrl='https://wa.me/'+waNum+'?text='+waMsg;
+    showNotif('&#128197; Meeting scheduled! Opening WhatsApp...',5000);
+    setTimeout(function(){window.open(waUrl,'_blank');},500);
   }
 }
 async function checkNew(){try{var r0=await fetch('/api/latest-pending?host='+encodeURIComponent('""" + name + """'));var d0=await r0.json();if(_hwr&&d0.visitor&&d0.visitor.id>_lv){_beep(4);addNotifCount();showNotif('&#128276; New visitor: '+d0.visitor.name,15000);
