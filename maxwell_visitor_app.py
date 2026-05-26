@@ -411,7 +411,7 @@ SOUND_WIDGET_PLACEHOLDER
       </div>
     </div>
     <div class="card">
-      <div class="section-title">&#128196; ID / Document Photo (Optional)</div>
+      <div class="section-title">&#128196; ID / Document Photo *</div>
       <div style="text-align:center;padding:8px 0">
         <span id="doc-icon" style="font-size:45px;color:#ddd;display:block;margin:6px 0">&#128196;</span>
         <img id="doc-preview" src="" alt="Document" style="max-width:100%;max-height:180px;border-radius:8px;border:2px solid #1565C0;display:none;margin:8px auto">
@@ -419,6 +419,7 @@ SOUND_WIDGET_PLACEHOLDER
           <label class="btn btn-blue" style="cursor:pointer">&#128190; Upload Document
             <input type="file" id="doc-input" accept="image/*,application/pdf" style="display:none" onchange="handleDocUpload(this)">
           </label>
+          <button class="btn btn-blue" onclick="startDocCam()" id="doc-cam-btn">&#128247; Capture</button>
           <button class="btn btn-red" id="doc-ret-btn" onclick="removeDoc()" style="display:none">&#10005; Remove</button>
         </div>
         <div id="doc-name" style="font-size:12px;color:#888;margin-top:6px"></div>
@@ -488,6 +489,22 @@ function retake(){photoData=null;document.getElementById('photo-preview').style.
 var docData=null;
 function handleDocUpload(input){if(!input.files||!input.files[0])return;var file=input.files[0];document.getElementById('doc-name').textContent=file.name;var reader=new FileReader();reader.onload=function(e){docData=e.target.result;if(file.type.startsWith('image/')){document.getElementById('doc-preview').src=docData;document.getElementById('doc-preview').style.display='block';}else{document.getElementById('doc-preview').style.display='none';}document.getElementById('doc-icon').style.display='none';document.getElementById('doc-ret-btn').style.display='';};reader.readAsDataURL(file);}
 function removeDoc(){docData=null;document.getElementById('doc-preview').style.display='none';document.getElementById('doc-icon').style.display='block';document.getElementById('doc-ret-btn').style.display='none';document.getElementById('doc-name').textContent='';document.getElementById('doc-input').value='';}
+var docStream=null;
+function startDocCam(){
+  document.getElementById('doc-cam-btn').style.display='none';
+  var v=document.createElement('video');v.id='doc-video';v.autoplay=true;v.style.cssText='width:100%;max-width:300px;border-radius:8px;margin:8px auto;display:block';
+  var c=document.createElement('canvas');c.id='doc-canvas';c.style.display='none';
+  var btn=document.createElement('button');btn.className='btn btn-green';btn.textContent='✓ Capture';btn.style.margin='8px';
+  btn.onclick=function(){
+    c.width=v.videoWidth;c.height=v.videoHeight;c.getContext('2d').drawImage(v,0,0);
+    docData=c.toDataURL('image/jpeg',0.8);
+    document.getElementById('doc-preview').src=docData;document.getElementById('doc-preview').style.display='block';
+    document.getElementById('doc-icon').style.display='none';document.getElementById('doc-ret-btn').style.display='';
+    if(docStream)docStream.getTracks().forEach(function(t){t.stop();});
+    v.remove();c.remove();btn.remove();document.getElementById('doc-cam-btn').style.display='';
+  };
+  navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}}).then(function(s){docStream=s;v.srcObject=s;var area=document.getElementById('doc-ret-btn').parentNode;area.appendChild(v);area.appendChild(c);area.appendChild(btn);}).catch(function(){alert('Camera not available');document.getElementById('doc-cam-btn').style.display='';});
+}
 function showAlert(msg){document.getElementById('alert-box').innerHTML='<div class="alert alert-error">'+msg+'</div>';setTimeout(function(){document.getElementById('alert-box').innerHTML='';},5000);}
 async function submitForm(){
   var name=document.getElementById('v-name').value.trim();
@@ -504,6 +521,7 @@ async function submitForm(){
   if(!purpose){showAlert('Please enter purpose!');return;}
   if(!cat){showAlert('Please select visitor category!');return;}
   if(!person){showAlert('Please select person to meet!');return;}
+  if(!docData){showAlert('Please upload ID/Document photo!');return;}
   try{
     var res=await fetch('/api/visitor',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({name:name,phone:phone,purpose:purpose,host_name:host,company:company,category:cat,department:dept,person_to_meet:person,photo:photoData,doc_photo:docData})});
