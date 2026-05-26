@@ -1838,7 +1838,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-s
         <button onclick="location.href='/employee-logout'" style="width:100%;padding:12px;background:#FFEBEE;color:#C62828;border:1.5px solid #EF9A9A;border-radius:12px;font-size:14px;font-weight:700;cursor:pointer;margin-top:8px">&#128682; Logout</button>
     </div>
 </div>
-<button onclick="scheduleMeeting()" style="position:fixed;bottom:155px;right:18px;width:54px;height:54px;background:linear-gradient(135deg,#2E7D32,#388E3C);border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 20px rgba(46,125,50,0.45);cursor:pointer;z-index:150;border:none;color:white;font-size:22px" title="Schedule Meeting">&#128197;</button>
 <a href="/" class="fab">+</a>
 <nav class="bottom-nav">
     <button class="nav-item active" onclick="scrollTo(0,0)"><div class="nav-icon">&#127968;</div><span>Dashboard</span></button>
@@ -1849,6 +1848,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-s
 </nav>
 <script>
 """ + BEEP_JS + """
+""" + SOUND_WIDGET + """
 var _qty={},_lv=""" + str(latest_hp_id) + """,_hwr=true,_notifCount=0,_oc=0;
 var _vt=""" + json.dumps(visitor_times) + """;
 var _reminded={};var _newPhotoData=null;
