@@ -224,6 +224,7 @@ def init_db():
             pass
     conn.execute("INSERT OR IGNORE INTO app_settings (key,value) VALUES ('admin_pin','1234')")
     conn.execute("INSERT OR IGNORE INTO app_settings (key,value) VALUES ('security_pass','1234')")
+    conn.execute("""CREATE TABLE IF NOT EXISTS employee_profiles (email TEXT PRIMARY KEY, name TEXT, department TEXT, designation TEXT, photo TEXT)""")
     
     conn.commit()
     conn.close()
