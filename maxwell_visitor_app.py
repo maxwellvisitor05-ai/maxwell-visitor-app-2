@@ -302,7 +302,6 @@ if HAS_SCHEDULER:
     except:
         pass
 
-
 # ═══════════════════════════════════════════════════
 # VISITOR FORM
 # ═══════════════════════════════════════════════════
@@ -574,7 +573,6 @@ async function submitForm(){
     html = html.replace("MGMT_JS", json.dumps(MANAGEMENT_LIST))
     return html
 
-
 @app.route("/api/visitor", methods=["POST"])
 def create_visitor():
     data = request.get_json()
@@ -687,27 +685,6 @@ def security_exit(vid):
             diff = ""
     return jsonify({"success": True, "exit_at": now, "diff": diff})
 
-@app.route("/api/security-exit/<int:vid>", methods=["POST"])
-def security_exit(vid):
-    now = get_ist()
-    conn = get_db()
-    conn.execute("UPDATE visitors SET exit_at=? WHERE id=?", (now, vid))
-    conn.commit()
-    v = dict(conn.execute("SELECT checkout_at,exit_at FROM visitors WHERE id=?", (vid,)).fetchone())
-    conn.close()
-    diff = ""
-    if v.get("checkout_at") and v.get("exit_at"):
-        try:
-            from datetime import datetime
-            fmt = "%d-%m-%Y %H:%M"
-            t1 = datetime.strptime(v["checkout_at"], fmt)
-            t2 = datetime.strptime(v["exit_at"], fmt)
-            mins = int((t2-t1).total_seconds()/60)
-            diff = str(mins) + " min"
-        except:
-            diff = ""
-    return jsonify({"success": True, "exit_at": now, "diff": diff})
-
 @app.route("/api/beverage", methods=["POST"])
 def order_beverage():
     data = request.get_json()
@@ -763,7 +740,6 @@ def save_profile():
     )
     return jsonify({"success": True})
 
-
 @app.route("/pass/<int:vid>")
 def show_pass(vid):
     conn = get_db()
@@ -810,7 +786,6 @@ def show_pass(vid):
             "<button onclick='window.print()' style='background:#1565C0;color:white;padding:10px 20px;border:none;border-radius:7px;cursor:pointer;font-size:14px'>Print Pass</button>"
             "</div><script>setTimeout(function(){window.print();},600);</script>"
             "</body></html>")
-
 
 # ══════════════════════════════════════════════════
 # ADMIN
@@ -1168,7 +1143,6 @@ def admin_settings():
             "<button type='submit'>Update Password</button></form></div>"
             "</div></body></html>")
 
-
 @app.route("/admin/export")
 def export_excel():
     if not session.get("admin_ok"):
@@ -1238,7 +1212,6 @@ def export_excel():
     filename = "Maxwell_Visitors_" + datetime.now().strftime("%d%m%Y") + ".xlsx"
     return send_file(buf, as_attachment=True, download_name=filename,
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
 
 # ══════════════════════════════════════════════════
 # SCHEDULED MEETINGS
@@ -1532,7 +1505,6 @@ def pantry_logout():
     session.pop("pantry_ok", None)
     return redirect("/pantry-login")
 
-
 # ══════════════════════════════════════════════════
 # EMPLOYEE
 # ══════════════════════════════════════════════════
@@ -1598,7 +1570,6 @@ def employee_login():
             + ("<p class='err'>" + err + "</p>" if err else "")
             + "</div><a href='/'>&#8592; Back to Visitor Form</a>"
             "</body></html>")
-
 
 @app.route("/employee-dashboard")
 def employee_dashboard():
@@ -2086,7 +2057,6 @@ setInterval(checkOrderReveal,15000);checkOrderReveal();
 def employee_logout():
     session.clear()
     return redirect("/employee-login")
-
 
 @app.route("/change-password", methods=["GET", "POST"])
 def change_password():
