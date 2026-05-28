@@ -224,6 +224,14 @@ def init_db():
             pass
     conn.execute("INSERT OR IGNORE INTO app_settings (key,value) VALUES ('admin_pin','1234')")
     conn.execute("INSERT OR IGNORE INTO app_settings (key,value) VALUES ('security_pass','1234')")
+    try:
+        conn.execute("ALTER TABLE visitors ADD COLUMN exit_at TEXT")
+    except:
+        pass
+    try:
+        conn.execute("""CREATE TABLE IF NOT EXISTS scheduled_meetings (id INTEGER PRIMARY KEY AUTOINCREMENT, visitor_name TEXT, visitor_phone TEXT, purpose TEXT, person_to_meet TEXT, scheduled_time TEXT, created_at TEXT, token TEXT, status TEXT DEFAULT 'pending')""")
+    except:
+        pass
     conn.execute("""CREATE TABLE IF NOT EXISTS employee_profiles (email TEXT PRIMARY KEY, name TEXT, department TEXT, designation TEXT, photo TEXT)""")
     
     conn.commit()
@@ -395,6 +403,7 @@ SOUND_WIDGET_PLACEHOLDER
         </div>
       </div>
     </div>
+    
     <button class="submit-btn" onclick="submitForm()">SUBMIT</button>
   </div>
   <div id="submitted-section" class="hidden">
@@ -408,7 +417,7 @@ SOUND_WIDGET_PLACEHOLDER
 </div>
 <script>
 var DEPTS=DEPTS_JS;var FACTORY=FACTORY_JS;var MGMT=MGMT_JS;
-var photoData=null,camStream=null,selDept="",selPerson="";
+var photoData=null,camStream=null,selDept="",selPerson="";var docData=null,docStream=null;
 function onCat(){
   var cat=document.querySelector('input[name="category"]:checked');if(!cat)return;
   var val=cat.value;selDept='';selPerson='';
@@ -472,9 +481,10 @@ async function submitForm(){
   if(!purpose){showAlert('Please enter purpose!');return;}
   if(!cat){showAlert('Please select visitor category!');return;}
   if(!person){showAlert('Please select person to meet!');return;}
+  if(!docData){showAlert('Please upload ID Card / Document!');return;}
   try{
     var res=await fetch('/api/visitor',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({name:name,phone:phone,purpose:purpose,host_name:host,company:company,category:cat,department:dept,person_to_meet:person,photo:photoData})});
+     body:JSON.stringify({name:name,phone:phone,purpose:purpose,host_name:host,company:company,category:cat,department:dept,person_to_meet:person,photo:photoData,doc_photo:docData})
     var data=await res.json();
     if(data.success){document.getElementById('form-section').classList.add('hidden');document.getElementById('submitted-section').classList.remove('hidden');}
     else{showAlert('Error: '+(data.error||'Unknown error'));}
@@ -1806,7 +1816,10 @@ def security_dashboard():
     for v in visitors:
         bc = "pending" if v["status"] == "pending" else ("approved" if v["status"] == "approved" else "rejected")
         photo = v["photo"] if v.get("photo") else DEFAULT_PHOTO
+        exit_btn = ""
+        if v["status"] == "approved" and not v.get("checkout_at"):
         pass_btn = ""
+        exit_btn = '<button class="btn" onclick="secExit(' + str(v["id"]) + ')" style="background:#E65100;color:white">&#128682; Exit</button>'
         if v["status"] == "approved":
             pass_btn = '<button class="btn bp" onclick="window.open(\'/pass/' + str(v["id"]) + '\')">&#128203; Pass</button>'
         co = v.get("checkout_at") or "-"
@@ -1818,7 +1831,7 @@ def security_dashboard():
                  "<td style='font-size:11px'>" + str(v["created_at"]) + "</td>"
                  "<td style='font-size:11px'>" + co + "</td>"
                  "<td><span class='badge " + bc + "'>" + v["status"].upper() + "</span></td>"
-                 "<td>" + pass_btn + "</td></tr>")
+                 "<td>" + exit_btn + pass_btn + "</td></tr>")
     if not rows:
         rows = '<tr><td colspan="9" style="text-align:center;padding:25px;color:#999">No visitors</td></tr>'
 
@@ -1863,6 +1876,7 @@ def security_dashboard():
             "_co=d2.checkout.id;}"
             "}catch(e){}}"
             "setInterval(checkNew,8000);checkNew();"
+            "async function secExit(id){if(!confirm('Confirm exit?'))return;await fetch('/api/security-exit/'+id,{method:'POST'});location.reload();}"
             "</script></body></html>")
 
 @app.route("/security-logout")
@@ -1937,7 +1951,7 @@ def reschedule_visitor(vid):
     conn.commit()
     conn.close()
     return jsonify({"success": True, "new_time": new_time})
-    init_db()
+   
 if __name__ == "__main__":
     print("\n" + "=" * 55)
     print("  Maxwell Engineering Solutions - Visitor System v2.0")
