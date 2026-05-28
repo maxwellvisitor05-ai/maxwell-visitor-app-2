@@ -1816,7 +1816,7 @@ def security_dashboard():
     for v in visitors:
         bc = "pending" if v["status"] == "pending" else ("approved" if v["status"] == "approved" else "rejected")
         photo = v["photo"] if v.get("photo") else DEFAULT_PHOTO
-             exit_btn = ""
+        exit_btn = ""
         if v["status"] == "approved" and not v.get("checkout_at"):
             pass_btn = ""
             exit_btn = '<button class="btn" onclick="secExit(' + str(v["id"]) + ')" style="background:#E65100;color:white">&#128682; Exit</button>'
