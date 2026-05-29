@@ -1222,7 +1222,7 @@ async function confirmOrder(vid,vname,person){
   if(!drink&&!snacks){alert('Please select drink or snacks!');return;}
   await fetch('/api/beverage',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({visitor_id:vid,visitor_name:vname,person_to_meet:person,drink:drink,quantity:qty,snacks:snacks,note:note})});
-  showNB('&#10003; Order sent!',5000);_beep(2);document.getElementById('ord-'+vid).style.display='none';}
+  showNB('&#10003; Order sent!',5000);_beep(2);document.getElementById('ord-'+vid).style.display='none';document.getElementById('drk-'+vid).value='';document.getElementById('snk-'+vid).value='';document.getElementById('nte-'+vid).value='';_qty[vid]=1;document.getElementById('qty-'+vid).textContent='1';}
 async function act(id,action){if(!confirm(action+' this visitor?'))return;
   await fetch('/action/'+id+'/'+action,{headers:{'Accept':'application/json'}});
   if(action==='approve')window.open('/pass/'+id);location.reload();}
