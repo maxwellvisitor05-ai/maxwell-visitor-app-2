@@ -1437,7 +1437,7 @@ def service_worker():
     "self.addEventListener('activate',e=>{self.clients.claim();});"
     "self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;"
     "try{e.respondWith(fetch(e.request));}catch(err){}});")
-return R(sw,mimetype="application/javascript")
+     return R(sw,mimetype="application/javascript")
 
 @app.route("/icon.png")
 def app_icon():
