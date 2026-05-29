@@ -1146,22 +1146,24 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-s
   <span style="background:#FFF3E0;color:#E65100;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:700">"""+str(pc)+"""</span></div>
   """+pending_cards+"""
 </div>
-<!-- Pre-Schedule Meeting Section -->
-<div class="sc">
-  <div class="sc-hdr"><div class="sc-ttl"><div class="sc-ico" style="background:#E8F5E9">&#128197;</div>Pre-Schedule Meeting</div></div>
+
+<div class="sc"><div class="sc-hdr"><div class="sc-ttl"><div class="sc-ico" style="background:#FFF8E1">&#128203;</div>Recent History</div></div>"""+hist_items+"""</div>
+</div>
+<!-- Schedule Meeting Modal -->
+<div class="mo" id="sched-mo"><div class="md">
+  <div class="md-ttl">&#128197; Pre-Schedule Meeting</div>
   <div class="ps-form">
     <div class="fgrp"><label>Visitor Name</label><input type="text" id="ps-name" placeholder="Enter visitor name" class="si"></div>
-    <div class="fgrp"><label>Mobile Number</label><input type="tel" id="ps-mobile" placeholder="10-digit mobile" class="si"></div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+    <div class="fgrp" style="margin-top:10px"><label>Mobile Number</label><input type="tel" id="ps-mobile" placeholder="10-digit mobile" class="si"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
       <div class="fgrp"><label>Date</label><input type="date" id="ps-date" class="si"></div>
       <div class="fgrp"><label>Time</label><input type="time" id="ps-time" class="si"></div>
     </div>
-    <button class="co-btn2" style="margin-top:4px" onclick="scheduleMeeting()">&#128241; Send WhatsApp Invite</button>
-    <div id="ps-msg" style="display:none;margin-top:8px;background:#E8F5E9;color:#2E7D32;padding:10px;border-radius:10px;font-weight:600;text-align:center"></div>
+    <button class="sv-btn" style="margin-top:16px" onclick="scheduleMeeting()">&#128241; Send WhatsApp Invite</button>
+    <div id="ps-msg" style="display:none;margin-top:10px;background:#E8F5E9;color:#2E7D32;padding:10px;border-radius:10px;font-weight:600;text-align:center"></div>
+    <button class="cl-btn" onclick="closeSchedMo()">Cancel</button>
   </div>
-</div>
-<div class="sc"><div class="sc-hdr"><div class="sc-ttl"><div class="sc-ico" style="background:#FFF8E1">&#128203;</div>Recent History</div></div>"""+hist_items+"""</div>
-</div>
+</div></div>
 <!-- Profile Modal -->
 <div class="mo" id="mo"><div class="md">
   <div class="md-ttl">&#128100; My Profile</div>
@@ -1185,7 +1187,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-s
   <button class="ni active"><div class="ni-ico">&#127968;</div><span>Home</span></button>
   <button class="ni" onclick="showPend()"><div class="ni-ico">&#128101;</div><span>Visitors</span></button>
   <button class="ni" onclick="location.href='/pantry'"><div class="ni-ico">&#9749;</div><span>Pantry</span></button>
-  <button class="ni" onclick="location.href='/'"><div class="ni-ico">&#128203;</div><span>Form</span></button>
+  <button class="ni" onclick="openSchedMo()"><div class="ni-ico">&#128197;</div><span>Schedule</span></button>
   <button class="ni" onclick="openMo()"><div class="ni-ico">&#128100;</div><span>Profile</span></button>
 </nav>
 <script>"""+BEEP_JS+"""
@@ -1235,7 +1237,8 @@ async function scheduleMeeting(){
 function showNB(msg,dur){var b=document.getElementById('nb-bar');b.innerHTML=msg;b.style.display='block';setTimeout(function(){b.style.display='none';},dur||8000);}
 function addNC(){_nc++;var e=document.getElementById('nb-cnt');e.style.display='flex';e.textContent=_nc;}
 function showPend(){document.getElementById('pend-sc').style.display='block';document.getElementById('pend-sc').scrollIntoView({behavior:'smooth'});}
-function openMo(){document.getElementById('mo').classList.add('open');}
+function openSchedMo(){document.getElementById('sched-mo').classList.add('open');}
+function closeSchedMo(){document.getElementById('sched-mo').classList.remove('open');}
 function closeMo(){document.getElementById('mo').classList.remove('open');_npd=null;}
 function handlePP(input){if(!input.files||!input.files[0])return;var r=new FileReader();r.onload=function(e){_npd=e.target.result;document.getElementById('mo-pi').src=_npd;document.getElementById('hdr-pi').src=_npd;};r.readAsDataURL(input.files[0]);}
 async function saveProfile(){var pld={name:document.getElementById('p-name').value.trim(),department:document.getElementById('p-dept').value.trim(),designation:document.getElementById('p-desig').value.trim()};
