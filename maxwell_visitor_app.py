@@ -1433,11 +1433,11 @@ def manifest():
 def service_worker():
     from flask import Response as R
     sw=("const CACHE='maxwell-v3';"
-    "self.addEventListener('install',e=>{self.skipWaiting();});"
-    "self.addEventListener('activate',e=>{self.clients.claim();});"
-    "self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;"
-    "try{e.respondWith(fetch(e.request));}catch(err){}});")
-     return R(sw,mimetype="application/javascript")
+        "self.addEventListener('install',e=>{self.skipWaiting();});"
+        "self.addEventListener('activate',e=>{self.clients.claim();});"
+        "self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;"
+        "try{e.respondWith(fetch(e.request));}catch(err){}})")
+            return R(sw,mimetype="application/javascript")
 
 @app.route("/icon.png")
 def app_icon():
