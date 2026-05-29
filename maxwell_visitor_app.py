@@ -1278,7 +1278,7 @@ async function scheduleMeeting(){
   var msg='Gate Pass Created!\nVisitor: '+n+'\nHost: '+'"""+name+"""'+'\nPurpose: '+purpose+'\nDate: '+dd+'\nTime: '+t+'\n\nYour OTP: '+otp+'\n\nGate Pass: '+gpurl+'\n\nPresent OTP to Security.\nMaxwell Engineering Solutions';
   window.open('https://wa.me/91'+m.replace(/\D/g,'')+' ?text='+encodeURIComponent(msg));
   var me=document.getElementById('ps-msg');
-  me.innerHTML='&#10003; Gate Pass created! OTP: <b style="font-size:20px;color:#1565C0;letter-spacing:3px">'+otp+'</b>';
+  me.innerHTML='&#10003; Gate Pass created! OTP: <b style='font-size:20px;color:#1565C0;letter-spacing:3px'>'+otp+'</b>';
   me.style.display='block';
   setTimeout(function(){me.style.display='none';},10000);
   _beep(3);
@@ -1290,6 +1290,7 @@ function addNC(){_nc++;var e=document.getElementById('nb-cnt');e.style.display='
 function showPend(){document.getElementById('pend-sc').style.display='block';document.getElementById('pend-sc').scrollIntoView({behavior:'smooth'});}
 function openSchedMo(){document.getElementById('sched-mo').classList.add('open');}
 function closeSchedMo(){document.getElementById('sched-mo').classList.remove('open');}
+function openMo(){document.getElementById('mo').classList.add('open');}
 function closeMo(){document.getElementById('mo').classList.remove('open');_npd=null;}
 function handlePP(input){if(!input.files||!input.files[0])return;var r=new FileReader();r.onload=function(e){_npd=e.target.result;document.getElementById('mo-pi').src=_npd;document.getElementById('hdr-pi').src=_npd;};r.readAsDataURL(input.files[0]);}
 async function saveProfile(){var pld={name:document.getElementById('p-name').value.trim(),department:document.getElementById('p-dept').value.trim(),designation:document.getElementById('p-desig').value.trim()};
