@@ -111,6 +111,12 @@ def init_db():
     for col in ["snacks TEXT","order_type TEXT DEFAULT 'drink'"]:
         try: conn.execute("ALTER TABLE pantry_orders ADD COLUMN {}".format(col))
         except: pass
+    conn.execute("""CREATE TABLE IF NOT EXISTS gate_passes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, meeting_id INTEGER,
+        host_name TEXT, visitor_name TEXT, visitor_phone TEXT,
+        purpose TEXT, otp TEXT, valid_from TEXT, valid_till TEXT,
+        created_at TEXT, status TEXT DEFAULT 'active'
+    )""")
     conn.execute("INSERT OR IGNORE INTO app_settings (key,value) VALUES ('admin_pin','1234')")
     conn.execute("INSERT OR IGNORE INTO app_settings (key,value) VALUES ('security_pass','1234')")
     conn.commit(); conn.close()
@@ -475,17 +481,15 @@ def schedule_meeting():
     conn.execute("INSERT INTO scheduled_meetings (host_name,visitor_name,visitor_phone,meeting_date,meeting_time,created_at) VALUES (?,?,?,?,?,?)",
                  (data.get("host_name"),data.get("visitor_name"),data.get("visitor_phone"),data.get("meeting_date"),data.get("meeting_time"),now))
     conn.commit()
-    meeting_id=conn.execute("SELECT id FROM scheduled_meetings ORDER BY id DESC LIMIT 1").fetchone()["id"]
+    mid=conn.execute("SELECT id FROM scheduled_meetings ORDER BY id DESC LIMIT 1").fetchone()["id"]
     otp=str(_rnd.randint(100000,999999))
-    from datetime import datetime as _dtt,timedelta as _tdd
+    from datetime import datetime as _dt,timedelta as _td
     try:
-        dt=_dtt.strptime((data.get("meeting_date",""))+" "+(data.get("meeting_time","")[:5]),"%Y-%m-%d %H:%M")
-        valid_from=dt.strftime("%d %b %Y, %I:%M %p")
-        valid_till=(dt+_tdd(hours=3)).strftime("%d %b %Y, %I:%M %p")
-    except:
-        valid_from=now; valid_till=now
+        dt=_dt.strptime((data.get("meeting_date",""))+" "+(data.get("meeting_time","")[:5]),"%Y-%m-%d %H:%M")
+        vfrom=dt.strftime("%d %b %Y, %I:%M %p"); vtill=(dt+_td(hours=3)).strftime("%d %b %Y, %I:%M %p")
+    except: vfrom=now; vtill=now
     conn.execute("INSERT INTO gate_passes (meeting_id,host_name,visitor_name,visitor_phone,purpose,otp,valid_from,valid_till,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                 (meeting_id,data.get("host_name"),data.get("visitor_name"),data.get("visitor_phone"),purpose,otp,valid_from,valid_till,now))
+                 (mid,data.get("host_name"),data.get("visitor_name"),data.get("visitor_phone"),purpose,otp,vfrom,vtill,now))
     conn.commit()
     gp=conn.execute("SELECT id FROM gate_passes ORDER BY id DESC LIMIT 1").fetchone()
     conn.close()
@@ -1198,11 +1202,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-s
   <div class="ps-form">
     <div class="fgrp"><label>Visitor Name</label><input type="text" id="ps-name" placeholder="Enter visitor name" class="si"></div>
     <div class="fgrp" style="margin-top:10px"><label>Mobile Number</label><input type="tel" id="ps-mobile" placeholder="10-digit mobile" class="si"></div>
-    <div class="fgrp" style="margin-top:10px"><label>Purpose of Visit</label><input type="text" id="ps-purpose" placeholder="e.g. Business Meeting, Interview..." class="si"></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
       <div class="fgrp"><label>Date</label><input type="date" id="ps-date" class="si"></div>
       <div class="fgrp"><label>Time</label><input type="time" id="ps-time" class="si"></div>
     </div>
+    <div class="fgrp" style="margin-top:10px"><label>Purpose of Visit</label><input type="text" id="ps-purpose" placeholder="e.g. Business Meeting..." class="si"></div>
     <button class="sv-btn" style="margin-top:16px" onclick="scheduleMeeting()">&#128203; Create Gate Pass &amp; Send</button>
     <div id="ps-msg" style="display:none;margin-top:10px;background:#E8F5E9;color:#2E7D32;padding:10px;border-radius:10px;font-weight:600;text-align:center"></div>
     <button class="cl-btn" onclick="closeSchedMo()">Cancel</button>
@@ -1235,7 +1239,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-s
   <button class="ni" onclick="openMo()"><div class="ni-ico">&#128100;</div><span>Profile</span></button>
 </nav>
 <script>"""+BEEP_JS+"""
-var _qty={},_gp_notified={},_lv="""+str(lhp_id)+""",_hwr=true,_nc=0,_rm={},_npd=null;
+var _qty={},_lv="""+str(lhp_id)+""",_hwr=true,_nc=0,_rm={},_npd=null;
 var _vt="""+json.dumps(visitor_times)+""";
 var h=new Date().getHours();document.getElementById('gh').textContent=h<12?'Good Morning,':h<17?'Good Afternoon,':'Good Evening,';
 function changeQty(v,d){if(!_qty[v])_qty[v]=1;_qty[v]=Math.max(1,_qty[v]+d);document.getElementById('qty-'+v).textContent=_qty[v];}
@@ -1266,33 +1270,46 @@ async function doReschedule(vid,vname,phone){
   window.open('https://wa.me/91'+phone.replace(/\\D/g,'')+' ?text='+msg);
   showNB('&#128197; Rescheduled & WhatsApp sent!',6000);setTimeout(function(){location.reload();},2000);}
 async function scheduleMeeting(){
-  var n=document.getElementById('ps-name').value.trim();var m=document.getElementById('ps-mobile').value.trim();
-  var d=document.getElementById('ps-date').value;var t=document.getElementById('ps-time').value;
-  var purpose=document.getElementById('ps-purpose').value.trim()||'Meeting';
+  var n=document.getElementById('ps-name').value.trim();
+  var m=document.getElementById('ps-mobile').value.trim();
+  var d=document.getElementById('ps-date').value;
+  var t=document.getElementById('ps-time').value;
+  var p=document.getElementById('ps-purpose');
+  var purpose=p?p.value.trim()||'Meeting':'Meeting';
   if(!n||!m||!d||!t){alert('Please fill all fields!');return;}
   var dateObj=new Date(d);var dd=dateObj.toLocaleDateString('en-IN',{day:'2-digit',month:'long',year:'numeric'});
   var res=await fetch('/api/schedule-meeting',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({host_name:'"""+name+"""',visitor_name:n,visitor_phone:m,meeting_date:d,meeting_time:t,purpose:purpose})});
+    body:JSON.stringify({host_name:'"""'+name+'"""',visitor_name:n,visitor_phone:m,meeting_date:d,meeting_time:t,purpose:purpose})});
   var data=await res.json();
-  if(!data.success){alert('Error!');return;}
+  if(!data.success){alert('Error creating!');return;}
   var otp=data.otp;var gpid=data.gate_pass_id;
   var gpurl=window.location.origin+'/gate-pass/'+gpid;
-  var msg='Gate Pass Created!\nVisitor: '+n+'\nHost: '+'"""+name+"""'+'\nPurpose: '+purpose+'\nDate: '+dd+'\nTime: '+t+'\n\nYour OTP: '+otp+'\n\nGate Pass: '+gpurl+'\n\nPresent OTP to Security.\nMaxwell Engineering Solutions';
-  window.open('https://wa.me/91'+m.replace(/\D/g,'')+' ?text='+encodeURIComponent(msg));
+  var wa='https://wa.me/91'+m.replace(/\D/g,'')+'?text=';
+  var msg='%F0%9F%93%8B Gate Pass Created!%0A%0AVisitor: '+encodeURIComponent(n);
+  msg+='%0AHost: '+encodeURIComponent('"""'+name+'"""');
+  msg+='%0APurpose: '+encodeURIComponent(purpose);
+  msg+='%0ADate: '+encodeURIComponent(dd)+'%0ATime: '+encodeURIComponent(t);
+  msg+='%0A%0AOTP: *'+otp+'*%0A%0AGate Pass: '+encodeURIComponent(gpurl);
+  msg+='%0A%0APresent OTP to Security. - Maxwell Engineering Solutions';
+  window.open(wa+msg);
   var me=document.getElementById('ps-msg');
-  me.innerHTML='&#10003; Gate Pass created! OTP: <b style="font-size:20px;color:#1565C0;letter-spacing:3px">'+otp+'<\/b>';
+  me.innerHTML='Gate Pass Created! OTP: <b style="font-size:22px;color:#1565C0;letter-spacing:4px">'+otp+'<\/b>';
   me.style.display='block';
-  setTimeout(function(){me.style.display='none';},10000);
+  setTimeout(function(){me.style.display='none';},12000);
   _beep(3);
-  document.getElementById('ps-name').value='';document.getElementById('ps-mobile').value='';
-  document.getElementById('ps-purpose').value='';
-  document.getElementById('ps-date').value='';document.getElementById('ps-time').value='';}
+  document.getElementById('ps-name').value='';
+  document.getElementById('ps-mobile').value='';
+  if(p)p.value='';
+  document.getElementById('ps-date').value='';
+  document.getElementById('ps-time').value='';}
 function showNB(msg,dur){var b=document.getElementById('nb-bar');b.innerHTML=msg;b.style.display='block';setTimeout(function(){b.style.display='none';},dur||8000);}
 function addNC(){_nc++;var e=document.getElementById('nb-cnt');e.style.display='flex';e.textContent=_nc;}
 function showPend(){document.getElementById('pend-sc').style.display='block';document.getElementById('pend-sc').scrollIntoView({behavior:'smooth'});}
 function openSchedMo(){document.getElementById('sched-mo').classList.add('open');}
 function closeSchedMo(){document.getElementById('sched-mo').classList.remove('open');}
 function openMo(){document.getElementById('mo').classList.add('open');}
+function openSchedMo(){document.getElementById('sched-mo').classList.add('open');}
+function closeSchedMo(){document.getElementById('sched-mo').classList.remove('open');}
 function closeMo(){document.getElementById('mo').classList.remove('open');_npd=null;}
 function handlePP(input){if(!input.files||!input.files[0])return;var r=new FileReader();r.onload=function(e){_npd=e.target.result;document.getElementById('mo-pi').src=_npd;document.getElementById('hdr-pi').src=_npd;};r.readAsDataURL(input.files[0]);}
 async function saveProfile(){var pld={name:document.getElementById('p-name').value.trim(),department:document.getElementById('p-dept').value.trim(),designation:document.getElementById('p-desig').value.trim()};
@@ -1303,12 +1320,7 @@ async function checkNew(){try{
   if(_hwr&&d0.visitor&&d0.visitor.id>_lv){_beep(4);addNC();showNB('&#128276; New visitor: '+d0.visitor.name,15000);}
   if(d0.visitor)_lv=d0.visitor.id;_hwr=true;
   var r1=await fetch('/api/pending-count');var d1=await r1.json();
-  document.title=d1.count>0?'('+d1.count+') \\u00B7 """+name+"""':'"""+name+""" \\u00B7 Maxwell';}catc
-  var r2=await fetch('/api/latest-gate-pass-entry');var d2=await r2.json();
-  if(d2.entry&&d2.entry.host_name=='"""+name+"""'&&!_gp_notified[d2.entry.id]){
-    _gp_notified[d2.entry.id]=true;_beep(4);addNC();
-    showNB('&#128203; <b>'+d2.entry.visitor_name+'</b> arrived! Gate Pass verified.',15000);}
-  }catch(e){}}h(e){}}
+  document.title=d1.count>0?'('+d1.count+') \\u00B7 """+name+"""':'"""+name+""" \\u00B7 Maxwell';}catch(e){}}
 if(Notification.permission==='default')Notification.requestPermission();
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js');}
 setInterval(checkNew,8000);checkNew();setInterval(chkReveal,15000);chkReveal();
@@ -1426,16 +1438,15 @@ def security_dashboard():
             ".ld{display:flex;align-items:center;gap:5px}.ldot{width:10px;height:10px;border-radius:50%}"
             "</style></head><body>"+hdr+SOUND_WIDGET+
             "<div class='container'><div class='nb' id='nb'></div>"
-            "<div class='otp-sec' style='background:white;border-radius:12px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,0.07);margin-bottom:16px'>"
-            "<h3 style='color:#1565C0;margin-bottom:14px;font-size:16px'>&#128203; Gate Pass Verification</h3>"
-            "<div style='display:flex;gap:10px;align-items:center;flex-wrap:wrap'>"
-            "<input type='text' id='otp-inp' placeholder='Enter 6-digit OTP' maxlength='6' style='padding:12px 16px;border:2px solid #1565C0;border-radius:10px;font-size:18px;font-weight:700;letter-spacing:4px;width:200px;text-align:center'>"
-            "<button onclick='verifyOTP()' style='padding:12px 22px;background:#1565C0;color:white;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer'>&#10003; Verify</button>"
-            "<button onclick='clearOTP()' style='padding:12px 16px;background:#f5f5f5;color:#555;border:none;border-radius:10px;font-size:14px;cursor:pointer'>Clear</button>"
-            "</div>"
-            "<div id='otp-result' style='display:none;margin-top:12px;padding:14px;border-radius:10px;font-weight:600'></div>"
-            "</div>"
-            "<div class='card'><h3>&#128100; Visitor Entries</h3>"
+            "<div style='background:white;border-radius:12px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,0.07);margin-bottom:16px'>"
+"<h3 style='color:#1565C0;margin-bottom:14px'>&#128203; Gate Pass OTP Verification</h3>"
+"<div style='display:flex;gap:10px;align-items:center;flex-wrap:wrap'>"
+"<input type='text' id='otp-inp' placeholder='Enter 6-digit OTP' maxlength='6' style='padding:12px;border:2px solid #1565C0;border-radius:10px;font-size:22px;font-weight:700;letter-spacing:6px;width:200px;text-align:center'>"
+"<button onclick='verifyOTP()' style='padding:12px 22px;background:#1565C0;color:white;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer'>&#10003; Verify</button>"
+"</div>"
+"<div id='otp-result' style='display:none;margin-top:12px;padding:14px;border-radius:10px;font-weight:600'></div>"
+"</div>"
+"<div class='card'><h3>&#128100; Visitor Entries</h3>"
             "<div class='legend'>"
             "<div class='ld'><div class='ldot' style='background:#2E7D32'></div>Exit Time = Confirmed Exit</div>"
             "<div class='ld'><div class='ldot' style='background:#C62828'></div>Red Exit = Checked out, needs to exit</div>"
@@ -1444,29 +1455,28 @@ def security_dashboard():
             "<table><tr><th>Photo</th><th>Name</th><th>Phone</th><th>Dept</th><th>Meeting</th><th>In Time</th><th>Checkout</th><th>Exit Time</th><th>Status</th><th>Action</th></tr>"
             +rows+"</table></div></div>"
             "<script>"+BEEP_JS
-            +"var _lv="+str(latest_id)+",_lco="+str(lco_id)+";"
-            "function clearOTP(){document.getElementById('otp-inp').value='';document.getElementById('otp-result').style.display='none';}"
-            "async function verifyOTP(){"
-            "var otp=document.getElementById('otp-inp').value.trim();"
-            "if(otp.length!==6){alert('Please enter 6-digit OTP!');return;}"
-            "var r=await fetch('/api/verify-gate-pass-otp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({otp:otp})});"
-            "var d=await r.json();"
-            "var res=document.getElementById('otp-result');"
-            "if(d.success){"
-            "res.style.background='#E8F5E9';res.style.color='#1B5E20';res.style.border='2px solid #2E7D32';"
-            "res.innerHTML='<div style=\"font-size:18px;margin-bottom:8px\">&#10003; Gate Pass Valid!</div>'+"
-            "'<div style=\"font-size:15px\"><b>'+d.visitor_name+'</b></div>'+"
-            "'<div style=\"font-size:13px;margin-top:4px\">Host: <b>'+d.host_name+'</b></div>'+"
-            "'<div style=\"font-size:13px\">Purpose: '+d.purpose+'</div>'+"
-            "'<div style=\"font-size:12px;color:#555;margin-top:4px\">Valid: '+d.valid_from+' &#8594; '+d.valid_till+'</div>'+"
-            "'<button onclick=\"window.open(\\\'/gate-pass/'+d.gate_pass_id+'\\\')\" style=\"margin-top:10px;padding:8px 16px;background:#1565C0;color:white;border:none;border-radius:8px;cursor:pointer\">View Full Pass</button>';"
-            "res.style.display='block';_beep(3);"
-            "fetch('/api/notify-gate-pass-entry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gate_pass_id:d.gate_pass_id,visitor_name:d.visitor_name,host_name:d.host_name})});"
-            "}else{"
-            "res.style.background='#FFEBEE';res.style.color='#C62828';res.style.border='2px solid #C62828';"
-            "res.innerHTML='&#10007; Invalid OTP! Please check and try again.';"
-            "res.style.display='block';_beep(2);}"
-            "}"
+            +"function verifyOTP(){"
+"var otp=document.getElementById('otp-inp').value.trim();"
+"if(otp.length!==6){alert('Please enter 6-digit OTP!');return;}"
+"fetch('/api/verify-gate-pass-otp',{method:'POST',headers:{'Content-Type':'application/json'},"
+"body:JSON.stringify({otp:otp})}).then(function(r){return r.json();}).then(function(d){"
+"var res=document.getElementById('otp-result');"
+"if(d.success){"
+"res.style.cssText='background:#E8F5E9;color:#1B5E20;border:2px solid #2E7D32;padding:14px;border-radius:10px';"
+"res.innerHTML='<div style=\"font-size:18px;margin-bottom:6px\">&#10003; Valid Gate Pass!</div>'+"
+"'<b style=\"font-size:16px\">'+d.visitor_name+'</b>'+"
+"'<div>Host: <b>'+d.host_name+'</b></div>'+"
+"'<div>Purpose: '+d.purpose+'</div>'+"
+"'<div style=\"font-size:12px;margin-top:4px\">Valid: '+d.valid_from+' - '+d.valid_till+'</div>'+"
+"'<a href=\"/gate-pass/'+d.gate_pass_id+'\" target=\"_blank\" style=\"display:inline-block;margin-top:8px;padding:7px 14px;background:#1565C0;color:white;border-radius:8px;text-decoration:none\">View Full Pass</a>';"
+"res.style.display='block';_beep(3);"
+"fetch('/api/notify-gate-pass-entry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gate_pass_id:d.gate_pass_id})});"
+"}else{"
+"res.style.cssText='background:#FFEBEE;color:#C62828;border:2px solid #C62828;padding:14px;border-radius:10px';"
+"res.innerHTML='&#10007; Invalid OTP! Please check and try again.';"
+"res.style.display='block';_beep(2);}});"
+"}"
+"var _lv="+str(latest_id)+",_lco="+str(lco_id)+";"
             "function showNB(msg,dur){var b=document.getElementById('nb');b.innerHTML=msg;b.style.display='block';setTimeout(function(){b.style.display='none';},dur||8000);}"
             "async function secExit(id){"
             "if(!confirm('Confirm visitor has physically exited the premises?'))return;"
@@ -1649,25 +1659,83 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f4f8;display:flex;jus
 </body></html>"""
     return html
 
+
+@app.route("/api/verify-gate-pass-otp", methods=["POST"])
+def verify_gate_pass_otp():
+    data=request.get_json(); conn=get_db()
+    gp=conn.execute("SELECT * FROM gate_passes WHERE otp=? AND status='active'",(data.get("otp",""),)).fetchone()
+    conn.close()
+    if gp: return jsonify({"success":True,"visitor_name":gp["visitor_name"],"visitor_phone":gp["visitor_phone"],"host_name":gp["host_name"],"purpose":gp["purpose"],"valid_from":gp["valid_from"],"valid_till":gp["valid_till"],"gate_pass_id":gp["id"]})
+    return jsonify({"success":False,"error":"Invalid or expired OTP"})
+
 @app.route("/api/notify-gate-pass-entry", methods=["POST"])
 def notify_gate_pass_entry():
     data=request.get_json(); conn=get_db()
-    gp_id=data.get("gate_pass_id"); visitor=data.get("visitor_name",""); host=data.get("host_name","")
-    # Mark gate pass as used
-    conn.execute("UPDATE gate_passes SET status='used' WHERE id=?", (gp_id,))
-    conn.commit()
-    # Find host email for notification
-    host_email=EMPLOYEE_EMAILS.get(host,"")
-    conn.close()
-    # Return host phone for WhatsApp notification (frontend will handle)
-    return jsonify({"success":True,"host_email":host_email,"message":visitor+" has arrived at reception!"})
+    conn.execute("UPDATE gate_passes SET status='used' WHERE id=?",(data.get("gate_pass_id"),))
+    conn.commit(); conn.close()
+    return jsonify({"success":True})
 
 @app.route("/api/latest-gate-pass-entry")
 def latest_gate_pass_entry():
     conn=get_db()
     row=conn.execute("SELECT * FROM gate_passes WHERE status='used' ORDER BY id DESC LIMIT 1").fetchone()
-    conn.close()
-    return jsonify({"entry":dict(row) if row else None})
+    conn.close(); return jsonify({"entry":dict(row) if row else None})
+
+@app.route("/gate-pass/<int:gpid>")
+def view_gate_pass(gpid):
+    conn=get_db(); gp=conn.execute("SELECT * FROM gate_passes WHERE id=?",(gpid,)).fetchone(); conn.close()
+    if not gp: return "Gate Pass not found",404
+    gp=dict(gp)
+    qr_img=""
+    if HAS_QR:
+        import io as _io
+        qr=qrcode.QRCode(version=2,box_size=6,border=2)
+        qr.add_data(request.host_url+"gate-pass/"+str(gpid))
+        qr.make(fit=True); img=qr.make_image(fill_color="black",back_color="white")
+        buf=_io.BytesIO(); img.save(buf,format="PNG"); buf.seek(0)
+        qr_img='<img src="data:image/png;base64,'+base64.b64encode(buf.read()).decode()+'" style="width:180px;height:180px">'
+    return ("""<!DOCTYPE html><html><head><meta charset='UTF-8'>
+<meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>Maxwell Gate Pass</title>
+<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f4f8;display:flex;justify-content:center;padding:20px}
+.pass{background:white;width:400px;max-width:100%;border-radius:20px;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,0.15)}
+.ph{background:#1565C0;padding:24px 20px;text-align:center}
+.logo{height:44px;object-fit:contain}
+.pt{font-size:11px;font-weight:700;letter-spacing:3px;color:rgba(255,255,255,0.8);margin-top:10px;text-transform:uppercase}
+.pb{padding:22px 26px}
+.ir{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+.ii{font-size:20px;color:#1565C0;width:28px}
+.il{font-size:10px;color:#999;text-transform:uppercase;letter-spacing:1px}
+.iv{font-size:16px;font-weight:700;color:#1a1a2e;margin-top:2px}
+.div{border:none;border-top:1px dashed #e0e0e0;margin:16px 0}
+.qs{text-align:center;padding:8px 0}
+.ob{background:linear-gradient(135deg,#1565C0,#0D47A1);border-radius:12px;padding:14px 20px;display:inline-block;margin:10px auto}
+.on{font-size:30px;font-weight:800;color:white;letter-spacing:8px;font-family:monospace}
+.vw{display:flex;gap:8px;margin:18px 0 0}
+.vi{flex:1;text-align:center;padding:12px 8px;background:#f8f9fa;border-radius:10px}
+.vico{font-size:18px;color:#1565C0}
+.vl{font-size:10px;color:#1565C0;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-top:4px}
+.vt{font-size:11px;color:#333;margin-top:3px;font-weight:600}
+.pf{padding:14px 20px;background:#f8f9fa;border-top:1px solid #e8eaed}
+.cp{width:100%;height:140px;object-fit:cover;object-position:center 60%}
+</style></head><body><div class='pass'>
+<div class='ph'><img src='"""+LOGO_MAIN+"""' class='logo'><div class='pt'>Visitor Gate Pass</div></div>
+<div class='pb'>
+<div class='ir'><div class='ii'>&#128100;</div><div><div class='il'>Host</div><div class='iv'>"""+gp["host_name"]+"""</div></div></div>
+<div class='ir'><div class='ii'>&#128203;</div><div><div class='il'>Purpose</div><div class='iv'>"""+gp["purpose"]+"""</div></div></div>
+<hr class='div'>
+<div class='qs'>"""+qr_img+"""
+<div class='ob'><div class='on'>"""+gp["otp"]+"""</div></div></div>
+<div class='vw'>
+<div class='vi'><div class='vico'>&#128197;</div><div class='vl'>Valid From</div><div class='vt'>"""+gp["valid_from"]+"""</div></div>
+<div class='vi'><div class='vico'>&#128336;</div><div class='vl'>Valid Till</div><div class='vt'>"""+gp["valid_till"]+"""</div></div>
+</div></div>
+<div class='pf'><div style='display:flex;align-items:flex-start;gap:8px'>
+<div style='font-size:16px;color:#1565C0'>&#128205;</div>
+<div><div style='font-size:12px;font-weight:700;color:#1565C0'>Maxwell Engineering Solutions</div>
+<div style='font-size:11px;color:#666;margin-top:2px'>Plot No. 939-940, Waghodia GIDC, Gujarat 391760</div></div></div></div>
+<img src='data:image/png;base64,"""+company_photo_b64+"""' class='cp'>
+</div></body></html>""")
 
 @app.route("/sw.js")
 def service_worker():
