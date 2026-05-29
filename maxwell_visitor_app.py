@@ -848,7 +848,7 @@ def pantry():
             ab='<button class="btn ba" onclick="delv('+str(o["id"])+')">&#10003; Delivered</button>'
             timer_html='<div id="tmr-'+str(o["id"])+'" style="font-size:12px;font-weight:600;margin-top:4px"></div>'
         dk=str(o.get("drink","") or "-"); qty=str(o.get("quantity","1")); snk=str(o.get("snacks","")) if o.get("snacks") else "-"
-        nt=str(o.get("note","") or "-")
+        note_raw=str(o.get("note","") or "-") def _guj(t):  w={"guest":"મહેમાન","arrived":"આવ્યા છે","with":"સાથે","without":"વગર","sugar":"ખાંડ","masala":"મસાલા","tea":"ચા","coffee":"કોફી","water":"પાણી","and":"અને","only":"માત્ર","please":"કૃપા કરીને","bring":"લઈ આવો","cup":"કપ","glass":"ગ્લાસ","hot":"ગરમ","cold":"ઠંડુ","milk":"દૂધ","biscuit":"બિસ્કિટ","snack":"નાસ્તો","juice":"જ્યૂસ","green":"ગ્રીન","black":"બ્લેક","note":"નોંધ","order":"ઓર્ડર","for":"માટે","one":"એક","two":"બે","three":"ત્રણ","four":"ચાર"}  return " ".join(w.get(x.lower(),x) for x in t.split()) nt=note_raw note_guj=_guj(note_raw)
         drink_guj={"Water":"પાણી","Tea":"ચા","Coffee":"કોફી","Green Tea":"ગ્રીન ટી","Black Coffee":"બ્લેક કોફી","Juice":"જ્યૂસ","Other":"ઓર્ડર"}
         qty_guj={"1":"એક","2":"બે","3":"ત્રણ","4":"ચાર","5":"પાંચ","6":"છ","7":"સાત","8":"આઠ","9":"નવ","10":"દસ"}
         gd=drink_guj.get(o.get("drink",""),o.get("drink",""))
@@ -860,7 +860,7 @@ def pantry():
         if o.get("snacks"): spk_data+=(" ane " if spk_data else "")+str(o.get("snacks",""))
         spk_btn=('<button class="btn" data-order="'+spk_data.replace('"',"&quot;")+'" data-guest="'+str(o.get("visitor_name","")).replace('"',"&quot;")+'" onclick="speakOrder(this)" style="background:#9C27B0;color:white;margin-top:4px">&#128266; બોલો</button>' if spk_data else "")
         rows+=("<tr id='row-"+str(o["id"])+"'><td><b>"+str(o["visitor_name"])+"</b></td><td>"+str(o["person_to_meet"])+"</td>"
-               "<td>"+dk+(" x"+qty if dk!="-" else "")+"</td><td>"+snk+"</td><td>"+nt+"</td>"
+               "<td>"+nt+"<br><small style='color:#7B1FA2'>"+note_guj+"</small></td>"
                "<td style='font-size:11px'>"+str(o["created_at"])+"</td>"
                "<td><span class='badge "+sb+"'>"+o["status"].upper()+"</span>"+timer_html+guj_disp+spk_btn+"</td>"
                "<td>"+ab+"</td></tr>")
