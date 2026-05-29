@@ -478,8 +478,9 @@ def schedule_meeting():
     import random as _rnd
     data=request.get_json();now=get_ist();conn=get_db()
     purpose=data.get("purpose","Meeting")
+    host=data.get("host_name") or session.get("emp_name","")
     conn.execute("INSERT INTO scheduled_meetings (host_name,visitor_name,visitor_phone,meeting_date,meeting_time,created_at) VALUES (?,?,?,?,?,?)",
-                 (data.get("host_name"),data.get("visitor_name"),data.get("visitor_phone"),data.get("meeting_date"),data.get("meeting_time"),now))
+                 (host,data.get("visitor_name"),data.get("visitor_phone"),data.get("meeting_date"),data.get("meeting_time"),now))
     conn.commit()
     mid=conn.execute("SELECT id FROM scheduled_meetings ORDER BY id DESC LIMIT 1").fetchone()["id"]
     otp=str(_rnd.randint(100000,999999))
@@ -489,7 +490,7 @@ def schedule_meeting():
         vfrom=dt.strftime("%d %b %Y, %I:%M %p"); vtill=(dt+_td(hours=3)).strftime("%d %b %Y, %I:%M %p")
     except: vfrom=now; vtill=now
     conn.execute("INSERT INTO gate_passes (meeting_id,host_name,visitor_name,visitor_phone,purpose,otp,valid_from,valid_till,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                 (mid,data.get("host_name"),data.get("visitor_name"),data.get("visitor_phone"),purpose,otp,vfrom,vtill,now))
+                 (mid,host,data.get("visitor_name"),data.get("visitor_phone"),purpose,otp,vfrom,vtill,now))
     conn.commit()
     gp=conn.execute("SELECT id FROM gate_passes ORDER BY id DESC LIMIT 1").fetchone()
     conn.close()
@@ -1279,7 +1280,7 @@ async function scheduleMeeting(){
   if(!n||!m||!d||!t){alert('Please fill all fields!');return;}
   var dateObj=new Date(d);var dd=dateObj.toLocaleDateString('en-IN',{day:'2-digit',month:'long',year:'numeric'});
   var res=await fetch('/api/schedule-meeting',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({host_name:'"""'+name+'"""',visitor_name:n,visitor_phone:m,meeting_date:d,meeting_time:t,purpose:purpose})});
+    body:JSON.stringify({host_name:_hn,visitor_name:n,visitor_phone:m,meeting_date:d,meeting_time:t,purpose:purpose})});
   var data=await res.json();
   if(!data.success){alert('Error creating!');return;}
   var otp=data.otp;var gpid=data.gate_pass_id;
