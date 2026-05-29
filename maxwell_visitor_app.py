@@ -1278,7 +1278,7 @@ async function scheduleMeeting(){
   var msg='Gate Pass Created!\nVisitor: '+n+'\nHost: '+'"""+name+"""'+'\nPurpose: '+purpose+'\nDate: '+dd+'\nTime: '+t+'\n\nYour OTP: '+otp+'\n\nGate Pass: '+gpurl+'\n\nPresent OTP to Security.\nMaxwell Engineering Solutions';
   window.open('https://wa.me/91'+m.replace(/\D/g,'')+' ?text='+encodeURIComponent(msg));
   var me=document.getElementById('ps-msg');
-  me.innerHTML='&#10003; Gate Pass created! OTP: <b style='font-size:20px;color:#1565C0;letter-spacing:3px'>'+otp+'</b>';
+  me.innerHTML='&#10003; Gate Pass created! OTP: <b style="font-size:20px;color:#1565C0;letter-spacing:3px">'+otp+'<\/b>';
   me.style.display='block';
   setTimeout(function(){me.style.display='none';},10000);
   _beep(3);
