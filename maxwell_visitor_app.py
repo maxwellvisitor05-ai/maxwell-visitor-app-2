@@ -848,7 +848,10 @@ def pantry():
             ab='<button class="btn ba" onclick="delv('+str(o["id"])+')">&#10003; Delivered</button>'
             timer_html='<div id="tmr-'+str(o["id"])+'" style="font-size:12px;font-weight:600;margin-top:4px"></div>'
         dk=str(o.get("drink","") or "-"); qty=str(o.get("quantity","1")); snk=str(o.get("snacks","")) if o.get("snacks") else "-"
-        note_raw=str(o.get("note","") or "-") def _guj(t):  w={"guest":"મહેમાન","arrived":"આવ્યા છે","with":"સાથે","without":"વગર","sugar":"ખાંડ","masala":"મસાલા","tea":"ચા","coffee":"કોફી","water":"પાણી","and":"અને","only":"માત્ર","please":"કૃપા કરીને","bring":"લઈ આવો","cup":"કપ","glass":"ગ્લાસ","hot":"ગરમ","cold":"ઠંડુ","milk":"દૂધ","biscuit":"બિસ્કિટ","snack":"નાસ્તો","juice":"જ્યૂસ","green":"ગ્રીન","black":"બ્લેક","note":"નોંધ","order":"ઓર્ડર","for":"માટે","one":"એક","two":"બે","three":"ત્રણ","four":"ચાર"}  return " ".join(w.get(x.lower(),x) for x in t.split()) nt=note_raw note_guj=_guj(note_raw)
+        note_raw=str(o.get("note","") or "-")
+        NOTE_TRANS={"guest":"મહેમાન","arrived":"આવ્યા છે","with":"સાથે","without":"વગર","sugar":"ખાંડ","masala":"મસાલા","tea":"ચા","coffee":"કોફી","water":"પાણી","and":"અને","only":"માત્ર","cup":"કપ","hot":"ગરમ","cold":"ઠંડુ","milk":"દૂધ","biscuit":"બિસ્કિટ","juice":"જ્યૂસ","green":"ગ્રીન","black":"બ્લેક","one":"એક","two":"બે","three":"ત્રણ","four":"ચાર"}
+        note_guj=" ".join(NOTE_TRANS.get(x.lower(),x) for x in note_raw.split())
+        nt=note_raw
         drink_guj={"Water":"પાણી","Tea":"ચા","Coffee":"કોફી","Green Tea":"ગ્રીન ટી","Black Coffee":"બ્લેક કોફી","Juice":"જ્યૂસ","Other":"ઓર્ડર"}
         qty_guj={"1":"એક","2":"બે","3":"ત્રણ","4":"ચાર","5":"પાંચ","6":"છ","7":"સાત","8":"આઠ","9":"નવ","10":"દસ"}
         gd=drink_guj.get(o.get("drink",""),o.get("drink",""))
