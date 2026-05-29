@@ -1549,124 +1549,6 @@ def verify_gate_pass_otp():
         return jsonify({"success":True,"visitor_name":gp["visitor_name"],"visitor_phone":gp["visitor_phone"],"host_name":gp["host_name"],"purpose":gp["purpose"],"valid_from":gp["valid_from"],"valid_till":gp["valid_till"],"gate_pass_id":gp["id"]})
     return jsonify({"success":False,"error":"Invalid or expired OTP"})
 
-@app.route("/gate-pass/<int:gpid>")
-def view_gate_pass(gpid):
-    conn=get_db()
-    gp=conn.execute("SELECT * FROM gate_passes WHERE id=?", (gpid,)).fetchone()
-    conn.close()
-    if not gp: return "Gate Pass not found", 404
-    gp=dict(gp)
-    # Generate QR code
-    qr_data_url=""
-    if HAS_QR:
-        import qrcode, io, base64
-        qr=qrcode.QRCode(version=2,box_size=6,border=2)
-        qr.add_data(request.host_url+"gate-pass/"+str(gpid)+"?otp="+gp["otp"])
-        qr.make(fit=True)
-        img=qr.make_image(fill_color="black",back_color="white")
-        buf=io.BytesIO(); img.save(buf,format="PNG"); buf.seek(0)
-        qr_data_url="data:image/png;base64,"+base64.b64encode(buf.read()).decode()
-    
-    html="""<!DOCTYPE html><html><head><meta charset='UTF-8'>
-<meta name='viewport' content='width=device-width,initial-scale=1'>
-<title>Maxwell Visitor Pass</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f4f8;display:flex;justify-content:center;align-items:flex-start;min-height:100vh;padding:20px}
-.pass{background:white;width:400px;max-width:100%;border-radius:20px;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,0.15)}
-.pass-header{background:white;padding:28px 20px 16px;text-align:center;border-bottom:1px solid #e8eaed}
-.logo-img{height:50px;object-fit:contain}
-.pass-title{font-size:11px;font-weight:700;letter-spacing:3px;color:#1565C0;margin-top:12px;text-transform:uppercase}
-.pass-title-line{width:60px;height:2px;background:#1565C0;margin:6px auto}
-.pass-body{padding:24px 28px}
-.info-row{display:flex;align-items:center;margin-bottom:16px;gap:12px}
-.info-icon{font-size:20px;width:32px;text-align:center;color:#1565C0}
-.info-text{}
-.info-label{font-size:10px;color:#999;text-transform:uppercase;letter-spacing:1px}
-.info-value{font-size:18px;font-weight:700;color:#1a1a2e;margin-top:2px}
-.divider{border:none;border-top:1px dashed #e0e0e0;margin:16px 0}
-.qr-section{text-align:center;padding:8px 0}
-.qr-img{width:180px;height:180px;object-fit:contain}
-.or-text{font-size:12px;color:#999;margin:10px 0;letter-spacing:2px;font-weight:600}
-.otp-box{background:linear-gradient(135deg,#1565C0,#0D47A1);border-radius:12px;padding:14px 20px;display:inline-block;margin:0 auto}
-.otp-number{font-size:32px;font-weight:800;color:white;letter-spacing:8px;font-family:monospace}
-.validity{display:flex;gap:0;margin:18px 0 0}
-.valid-item{flex:1;text-align:center;padding:12px 8px;background:#f8f9fa;border-radius:10px}
-.valid-item:first-child{margin-right:8px}
-.valid-icon{font-size:20px;color:#1565C0}
-.valid-label{font-size:10px;color:#1565C0;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-top:4px}
-.valid-time{font-size:11px;color:#333;margin-top:3px;font-weight:600}
-.pass-footer{padding:16px 20px;background:#f8f9fa;border-top:1px solid #e8eaed}
-.addr-row{display:flex;align-items:flex-start;gap:8px}
-.addr-icon{font-size:16px;color:#1565C0;margin-top:2px}
-.addr-name{font-size:12px;font-weight:700;color:#1565C0}
-.addr-text{font-size:11px;color:#666;margin-top:2px;line-height:1.4}
-.company-photo{width:100%;height:160px;object-fit:cover;object-position:center 60%}
-</style></head><body>
-<div class='pass'>
-  <div class='pass-header'>
-    <img src='"""+LOGO_MAIN+"""' class='logo-img'>
-    <div class='pass-title'>Visitor Pass</div>
-    <div class='pass-title-line'></div>
-  </div>
-  <div class='pass-body'>
-    <div class='info-row'>
-      <div class='info-icon'>&#128100;</div>
-      <div class='info-text'>
-        <div class='info-label'>Host</div>
-        <div class='info-value'>"""+gp["host_name"]+"""</div>
-      </div>
-    </div>
-    <div class='info-row'>
-      <div class='info-icon'>&#128203;</div>
-      <div class='info-text'>
-        <div class='info-label'>Purpose</div>
-        <div class='info-value' style='font-size:16px'>"""+gp["purpose"]+"""</div>
-      </div>
-    </div>
-    <hr class='divider'>
-    <div class='qr-section'>
-      """+('<img src="'+qr_data_url+'" class="qr-img">' if qr_data_url else '<div style="padding:40px;background:#f5f5f5;border-radius:12px;color:#999;font-size:13px">QR not available</div>')+"""
-      <div class='or-text'>— OR —</div>
-      <div class='otp-box'>
-        <div class='otp-number'>"""+gp["otp"]+"""</div>
-      </div>
-    </div>
-    <div class='validity'>
-      <div class='valid-item'>
-        <div class='valid-icon'>&#128197;</div>
-        <div class='valid-label'>Valid From</div>
-        <div class='valid-time'>"""+gp["valid_from"]+"""</div>
-      </div>
-      <div class='valid-item'>
-        <div class='valid-icon'>&#128336;</div>
-        <div class='valid-label'>Valid Till</div>
-        <div class='valid-time'>"""+gp["valid_till"]+"""</div>
-      </div>
-    </div>
-  </div>
-  <div class='pass-footer'>
-    <div class='addr-row'>
-      <div class='addr-icon'>&#128205;</div>
-      <div>
-        <div class='addr-name'>Maxwell Engineering Solutions Limited</div>
-        <div class='addr-text'>Plot No. 939-940, Waghodia GIDC, Gujarat 391760</div>
-      </div>
-    </div>
-  </div>
-  <img src='data:image/png;base64,"""+company_photo_b64+"""' class='company-photo'>
-</div>
-</body></html>"""
-    return html
-
-
-@app.route("/api/verify-gate-pass-otp", methods=["POST"])
-def verify_gate_pass_otp():
-    data=request.get_json(); conn=get_db()
-    gp=conn.execute("SELECT * FROM gate_passes WHERE otp=? AND status='active'",(data.get("otp",""),)).fetchone()
-    conn.close()
-    if gp: return jsonify({"success":True,"visitor_name":gp["visitor_name"],"visitor_phone":gp["visitor_phone"],"host_name":gp["host_name"],"purpose":gp["purpose"],"valid_from":gp["valid_from"],"valid_till":gp["valid_till"],"gate_pass_id":gp["id"]})
-    return jsonify({"success":False,"error":"Invalid or expired OTP"})
 
 @app.route("/api/notify-gate-pass-entry", methods=["POST"])
 def notify_gate_pass_entry():
@@ -1736,6 +1618,8 @@ def view_gate_pass(gpid):
 <div style='font-size:11px;color:#666;margin-top:2px'>Plot No. 939-940, Waghodia GIDC, Gujarat 391760</div></div></div></div>
 <img src='data:image/png;base64,"""+company_photo_b64+"""' class='cp'>
 </div></body></html>""")
+
+
 
 @app.route("/sw.js")
 def service_worker():
