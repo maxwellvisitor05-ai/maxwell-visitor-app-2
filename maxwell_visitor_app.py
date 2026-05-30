@@ -732,6 +732,8 @@ def admin():
             "<tr><th>Guest</th><th>Host</th><th>Drink</th><th>Snacks</th><th>Time</th><th>Status</th></tr>"+orows+"</table></div>"
             "<div class='card'><h3>&#128197; Scheduled Meetings</h3><table class='st'>"
             "<tr><th>Visitor</th><th>Phone</th><th>Host</th><th>Date &amp; Time</th><th>Created</th><th>Status</th></tr>"+srows+"</table></div>"
+            "<div class='sec'><h3>&#128203; Gate Pass Entries</h3>"
+            "<div id='gp-entries-list'><div style='text-align:center;color:#999;padding:20px'>Loading...</div></div></div>"
             "<div class='card'><h3>&#128274; Employee Password Reset</h3>"
             "<div id='rst-msg' style='display:none;background:#E8F5E9;color:#2E7D32;padding:10px;border-radius:7px;margin-bottom:10px;font-weight:600'></div>"
             "<table class='et'><tr><th>Employee</th><th>Email</th><th>Action</th></tr>"+erows+"</table></div>"
@@ -765,7 +767,35 @@ def admin():
             "if(d3.meeting&&d3.meeting.id>_sl){_beep(2);showNB('&#128197; Meeting scheduled: '+d3.meeting.visitor_name+' with '+d3.meeting.host_name,12000);_sl=d3.meeting.id;}"
             "}catch(e){}}"
             "if(Notification.permission==='default')Notification.requestPermission();"
+            "var _gp_pending={};"
+            "async function checkGatePasses(){"
+            "try{var r=await fetch('/api/host-pending-gate-passes');var d=await r.json();"
+            "var sec=document.getElementById('gp-approval-sec');"
+            "if(!sec)return;"
+            "if(d.passes&&d.passes.length>0){"
+            "sec.style.display='block';"
+            "var html='';"
+            "d.passes.forEach(function(p){"
+            "if(!_gp_pending[p.id]){_gp_pending[p.id]=true;_beep(3);}"
+            "html+='<div style=\"background:#FFF3E0;border:2px solid #FF9800;border-radius:12px;padding:14px;margin-bottom:10px\">'+"
+            "'<div style=\"font-size:15px;font-weight:700;color:#E65100;margin-bottom:6px\">&#128203; Gate Pass Approval</div>'+"
+            "'<b>'+p.visitor_name+'</b> has arrived<br><span style=\"font-size:12px;color:#666\">Purpose: '+p.purpose+'</span>'+"
+            "'<div style=\"display:flex;gap:10px;margin-top:10px\">'+"
+            "'<button onclick=\"approveGP('+p.id+')\' style=\"flex:1;padding:10px;background:#2E7D32;color:white;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer\">&#10003; Approve</button>'+"
+            "'<button onclick=\"rejectGP('+p.id+')\' style=\"flex:1;padding:10px;background:#C62828;color:white;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer\">&#10007; Reject</button>'+"
+            "'</div></div>';"
+            "});"
+            "sec.innerHTML=html;"
+            "}else{sec.style.display='none';}"
+            "}catch(e){}}"
+            "async function approveGP(id){"
+            "await fetch('/api/approve-gate-pass',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gate_pass_id:id})});"
+            "_beep(2);delete _gp_pending[id];checkGatePasses();}"
+            "async function rejectGP(id){"
+            "await fetch('/api/reject-gate-pass',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gate_pass_id:id})});"
+            "delete _gp_pending[id];checkGatePasses();}"
             "setInterval(checkNew,8000);checkNew();setInterval(checkAVO,15000);checkAVO();"
+            "setInterval(checkGatePasses,5000);checkGatePasses();"
             "</script></body></html>")
 
 @app.route("/admin-login", methods=["POST"])
@@ -1133,14 +1163,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-s
 .si2{text-align:center;padding:8px 4px}.si2-ico{font-size:22px;margin-bottom:4px}
 .si2-num{font-size:20px;font-weight:900;line-height:1}.si2-lbl{font-size:10px;color:#888;font-weight:600;margin-top:3px}
 .c1 .si2-num{color:#7C3AED}.c2 .si2-num{color:#2E7D32}.c3 .si2-num{color:#E65100}.c4 .si2-num{color:#1565C0}
-.pi{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid #F5F5F5;flex-wrap:wrap}
+.pi{display:flex;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid #F5F5F5;flex-wrap:nowrap}
 .pi:last-child{border-bottom:none}.pi-photo{width:44px;height:44px;border-radius:50%;object-fit:cover;border:2px solid #E0E0E0;flex-shrink:0}
-.pi-info{flex:1;min-width:0}.pi-name{font-size:14px;font-weight:700;color:#1A1A2E}
+.pi-info{flex:1;min-width:0;overflow:hidden}.pi-name{font-size:14px;font-weight:700;color:#1A1A2E}
 .pi-sub{font-size:11px;color:#888;margin-top:2px}.pi-t{font-size:10px;color:#1565C0;margin-top:2px;font-weight:600}
-.pi-acts{display:flex;gap:6px;flex-shrink:0}
-.pa-ok{width:34px;height:34px;background:#E8F5E9;color:#2E7D32;border:none;border-radius:50%;font-size:16px;font-weight:700;cursor:pointer}
-.pa-no{width:34px;height:34px;background:#FFEBEE;color:#C62828;border:none;border-radius:50%;font-size:16px;font-weight:700;cursor:pointer}
-.pa-rs{width:34px;height:34px;background:#FFF8E1;color:#E65100;border:none;border-radius:50%;font-size:16px;cursor:pointer}
+.pi-acts{display:flex;gap:6px;flex-shrink:0;align-items:center}
+.pa-ok{width:36px;height:36px;min-width:36px;background:#E8F5E9;color:#2E7D32;border:none;border-radius:50%;font-size:18px;font-weight:700;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+.pa-no{width:36px;height:36px;min-width:36px;background:#FFEBEE;color:#C62828;border:none;border-radius:50%;font-size:18px;font-weight:700;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+.pa-rs{width:36px;height:36px;min-width:36px;background:#E3F2FD;color:#1565C0;border:none;border-radius:50%;font-size:16px;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
 .hr{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid #F5F5F5}
 .hr:last-child{border-bottom:none}.hav{width:40px;height:40px;border-radius:50%;color:white;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;flex-shrink:0}
 .hi{flex:1;min-width:0}.hn{font-size:13px;font-weight:700}.hs{font-size:11px;color:#888;margin-top:2px}
@@ -1181,6 +1211,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-s
 """+SOUND_WIDGET+
 ("""<div class="ab"><div class="ab-left"><span>&#128274;</span><span>Please change your default password!</span></div><a href="/change-password" class="ab-link">Change Now</a></div>""" if force_change else "")+
 """<div class="nb" id="nb-bar"></div>
+<div id="gp-approval-sec" style="display:none;padding:0 14px 10px"></div>
 <div class="pg">
 <div class="sc"><div class="sc-hdr"><div class="sc-ttl"><div class="sc-ico">&#128100;</div>Active Visitors</div></div>"""+active_cards+"""</div>
 <div class="sw"><div class="sr">
@@ -1493,7 +1524,19 @@ def security_dashboard():
             "_beep(3);showNB('&#128682; '+d2.checkout.name+' checked out \\u2014 please allow exit!',12000);_lco=d2.checkout.id;"
             "setTimeout(function(){location.reload();},3000);}}"
             "catch(e){}}"
+            "async function loadGatePasses(){"
+            "try{var r=await fetch('/api/all-gate-pass-entries');var d=await r.json();"
+            "var el=document.getElementById('gp-entries-list');if(!el)return;"
+            "if(!d.entries||d.entries.length===0){el.innerHTML='<div style=\"text-align:center;color:#999;padding:20px\">No gate pass entries yet</div>';return;}"
+            "var html='<table class=\"st\"><tr><th>Visitor</th><th>Host</th><th>Purpose</th><th>OTP</th><th>Status</th><th>Time</th></tr>';"
+            "d.entries.forEach(function(e){"
+            "var sc=e.status==='approved'?'color:#2E7D32;font-weight:700':e.status==='rejected'?'color:#C62828;font-weight:700':e.status==='gate_pending'?'color:#E65100;font-weight:700':'color:#555';"
+            "var sl=e.status==='approved'?'&#10003; Approved':e.status==='rejected'?'&#10007; Rejected':e.status==='gate_pending'?'&#9203; Pending Host':'Used';"
+            "html+='<tr><td>'+e.visitor_name+'</td><td>'+e.host_name+'</td><td>'+e.purpose+'</td><td style=\"font-family:monospace;letter-spacing:2px;font-weight:700\">'+e.otp+'</td><td style=\"font-size:12px;'+sc+'\">'+sl+'</td><td style=\"font-size:11px;color:#999\">'+e.created_at+'</td></tr>';"
+            "});"
+            "el.innerHTML=html+'</table>';}catch(e){}}"
             "setInterval(checkNew,8000);checkNew();"
+            "setInterval(loadGatePasses,8000);loadGatePasses();"
             "</script></body></html>")
 
 @app.route("/security-logout")
@@ -1554,14 +1597,14 @@ def verify_gate_pass_otp():
 @app.route("/api/notify-gate-pass-entry", methods=["POST"])
 def notify_gate_pass_entry():
     data=request.get_json(); conn=get_db()
-    conn.execute("UPDATE gate_passes SET status='used' WHERE id=?",(data.get("gate_pass_id"),))
+    conn.execute("UPDATE gate_passes SET status='gate_pending' WHERE id=?",(data.get("gate_pass_id"),))
     conn.commit(); conn.close()
     return jsonify({"success":True})
 
 @app.route("/api/latest-gate-pass-entry")
 def latest_gate_pass_entry():
     conn=get_db()
-    row=conn.execute("SELECT * FROM gate_passes WHERE status='used' ORDER BY id DESC LIMIT 1").fetchone()
+    row=conn.execute("SELECT * FROM gate_passes WHERE status='gate_pending' ORDER BY id DESC LIMIT 1").fetchone()
     conn.close(); return jsonify({"entry":dict(row) if row else None})
 
 @app.route("/gate-pass/<int:gpid>")
@@ -1670,6 +1713,36 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f4f8;min-height:100vh
 </div>
 </body></html>""")
 
+
+
+@app.route("/api/approve-gate-pass", methods=["POST"])
+def approve_gate_pass():
+    data=request.get_json(); conn=get_db()
+    conn.execute("UPDATE gate_passes SET status='approved' WHERE id=?",(data.get("gate_pass_id"),))
+    conn.commit(); conn.close()
+    return jsonify({"success":True})
+
+@app.route("/api/reject-gate-pass", methods=["POST"])
+def reject_gate_pass():
+    data=request.get_json(); conn=get_db()
+    conn.execute("UPDATE gate_passes SET status='rejected' WHERE id=?",(data.get("gate_pass_id"),))
+    conn.commit(); conn.close()
+    return jsonify({"success":True})
+
+@app.route("/api/host-pending-gate-passes")
+def host_pending_gate_passes():
+    if "emp_name" not in session: return jsonify({"passes":[]})
+    conn=get_db()
+    rows=conn.execute("SELECT * FROM gate_passes WHERE host_name=? AND status='gate_pending' ORDER BY id DESC",(session["emp_name"],)).fetchall()
+    conn.close()
+    return jsonify({"passes":[dict(r) for r in rows]})
+
+@app.route("/api/all-gate-pass-entries")
+def all_gate_pass_entries():
+    conn=get_db()
+    rows=conn.execute("SELECT * FROM gate_passes WHERE status IN ('gate_pending','approved','rejected','used') ORDER BY id DESC LIMIT 50").fetchall()
+    conn.close()
+    return jsonify({"entries":[dict(r) for r in rows]})
 
 @app.route("/sw.js")
 def service_worker():
