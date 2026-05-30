@@ -100,7 +100,7 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT, meeting_id INTEGER,
         host_name TEXT, visitor_name TEXT, visitor_phone TEXT,
         purpose TEXT, otp TEXT, valid_from TEXT, valid_till TEXT,
-        created_at TEXT, status TEXT DEFAULT 'active'
+        created_at TEXT, status TEXT DEFAULT 'active', approved_at TEXT
     )""")
     for col in ["purpose TEXT","otp TEXT","valid_from TEXT","valid_till TEXT"]:
         try: conn.execute("ALTER TABLE gate_passes ADD COLUMN {}".format(col))
@@ -115,7 +115,7 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT, meeting_id INTEGER,
         host_name TEXT, visitor_name TEXT, visitor_phone TEXT,
         purpose TEXT, otp TEXT, valid_from TEXT, valid_till TEXT,
-        created_at TEXT, status TEXT DEFAULT 'active'
+        created_at TEXT, status TEXT DEFAULT 'active', approved_at TEXT
     )""")
     conn.execute("INSERT OR IGNORE INTO app_settings (key,value) VALUES ('admin_pin','1234')")
     conn.execute("INSERT OR IGNORE INTO app_settings (key,value) VALUES ('security_pass','1234')")
@@ -1328,10 +1328,35 @@ if(Notification.permission==='default')Notification.requestPermission();
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js');}
 var _gp_pending={};
 async function checkGatePasses(){try{var r=await fetch('/api/host-pending-gate-passes');var d=await r.json();var sec=document.getElementById('gp-approval-sec');if(!sec)return;if(d.passes&&d.passes.length>0){sec.style.display='block';var html='';d.passes.forEach(function(p){if(!_gp_pending[p.id]){_gp_pending[p.id]=true;_beep(3);}html+='<div style="background:#FFF3E0;border:2px solid #FF9800;border-radius:12px;padding:14px;margin-bottom:10px">'+'<b style="color:#E65100">&#128203; Gate Pass Approval</b><br>'+'<b>'+p.visitor_name+'</b> arrived | '+p.purpose+'<div style="display:flex;gap:8px;margin-top:8px">'+'<button onclick="approveGP('+p.id+')" style="flex:1;padding:8px;background:#2E7D32;color:white;border:none;border-radius:8px;font-weight:700;cursor:pointer">&#10003; Approve</button>'+'<button onclick="rejectGP('+p.id+')" style="flex:1;padding:8px;background:#C62828;color:white;border:none;border-radius:8px;font-weight:700;cursor:pointer">&#10007; Reject</button>'+'</div></div>';});sec.innerHTML=html;}else{sec.style.display='none';}}catch(e){}}
-async function approveGP(id){fetch('/api/approve-gate-pass',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gate_pass_id:id})}).then(function(){_beep(2);delete _gp_pending[id];checkGatePasses();});}
+async function approveGP(id){var r=await fetch('/api/approve-gate-pass',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gate_pass_id:id})});var d=await r.json();_beep(2);delete _gp_pending[id];checkGatePasses();// Show water sent confirmation
+var sec=document.getElementById('gp-approval-sec');if(sec)sec.innerHTML='<div style="background:#E3F2FD;border:2px solid #1565C0;border-radius:12px;padding:14px;margin-bottom:10px">'+'<b style="color:#1565C0">&#128167; Water order sent to Pantry!</b><br>'+'<span style="font-size:12px;color:#666">Guest order table will open in 7 minutes</span></div>';}
 async function rejectGP(id){fetch('/api/reject-gate-pass',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gate_pass_id:id})}).then(function(){delete _gp_pending[id];checkGatePasses();});}
 setInterval(checkNew,8000);checkNew();setInterval(chkReveal,15000);chkReveal();
 setInterval(checkGatePasses,5000);checkGatePasses();
+var _gpOrderShown={};
+async function checkGpOrderReady(){
+try{var r=await fetch('/api/gate-pass-order-ready');var d=await r.json();
+if(d.passes&&d.passes.length>0){
+d.passes.forEach(function(p){
+if(_gpOrderShown[p.id])return;
+_gpOrderShown[p.id]=true;
+_beep(2);
+// Show order table same as normal visitor
+var container=document.getElementById('gp-approval-sec');
+if(!container)return;
+container.style.display='block';
+container.innerHTML='<div style="background:#FFF8E1;border:2px solid #FF9800;border-radius:12px;padding:16px;margin-bottom:10px">'+'<b style="color:#E65100;font-size:15px">&#9749; Guest Order — '+p.visitor_name+'</b><br>'+'<div style="margin-top:10px">'+'<select id="gp-drink-'+p.id+'" style="padding:8px;border-radius:8px;border:1px solid #ddd;font-size:14px;width:100%;margin-bottom:8px">'+'<option value="Tea">&#9749; Tea</option><option value="Coffee">&#9749; Coffee</option><option value="Juice">&#127815; Juice</option><option value="Water">&#128167; Water</option></select>'+'<button onclick="orderForGp('+p.id+',\''+p.visitor_name+'\')" style="width:100%;padding:10px;background:#1565C0;color:white;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer">&#128203; Place Order</button>'+'</div></div>';
+});}
+}catch(e){}}
+async function orderForGp(gpid,vname){
+var drink=document.getElementById('gp-drink-'+gpid);
+if(!drink)return;
+await fetch('/api/order-beverage',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({visitor_name:vname,drink:drink.value,quantity:1,note:'Gate Pass Guest'})});
+_beep(2);
+document.getElementById('gp-approval-sec').innerHTML='<div style="background:#E8F5E9;color:#2E7D32;border-radius:12px;padding:14px;text-align:center">&#10003; Order placed!</div>';
+_gpOrderShown[gpid]=true;}
+setInterval(checkGpOrderReady,30000);checkGpOrderReady();
 </script></body></html>""").replace("MLOGO",LOGO_MAIN).replace("EPHOTO",emp_photo).replace("EPHOTO2",emp_photo).replace("EMPNAME",name).replace("EMPEMAIL",email).replace("EMPDEPT",emp_dept).replace("EMPDESIG",emp_desig)
 
 @app.route("/employee-logout")
@@ -1478,7 +1503,7 @@ def security_dashboard():
 "'<div style=\"font-size:12px;margin-top:4px\">Valid: '+d.valid_from+' - '+d.valid_till+'</div>'+"
 "'<a href=\"/gate-pass/'+d.gate_pass_id+'\" target=\"_blank\" style=\"display:inline-block;margin-top:8px;padding:7px 14px;background:#1565C0;color:white;border-radius:8px;text-decoration:none\">View Full Pass</a>';"
 "res.style.display='block';_beep(3);"
-"fetch('/api/notify-gate-pass-entry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gate_pass_id:d.gate_pass_id})});"
+"fetch('/api/notify-gate-pass-entry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gate_pass_id:d.gate_pass_id})});var _gpid=d.gate_pass_id;var _pollTimer=setInterval(function(){fetch('/api/gate-pass-approval-status').then(function(r){return r.json();}).then(function(s){if(s.entry&&s.entry.id==_gpid){clearInterval(_pollTimer);if(s.entry.status==='approved'){res.style.cssText='background:#E8F5E9;color:#1B5E20;border:2px solid #2E7D32;padding:14px;border-radius:10px';res.innerHTML='<div style=\"font-size:20px;margin-bottom:6px\">&#10003; HOST APPROVED!</div><b>'+d.visitor_name+'</b> - Entry Confirmed<br><span style=\"font-size:12px\">Host: '+d.host_name+'</span>';_beep(3);}else if(s.entry.status==='rejected'){res.style.cssText='background:#FFEBEE;color:#C62828;border:2px solid #C62828;padding:14px;border-radius:10px';res.innerHTML='&#10007; HOST REJECTED! Do not allow entry.';;_beep(2);}}});},3000);"
 "}else{"
 "res.style.cssText='background:#FFEBEE;color:#C62828;border:2px solid #C62828;padding:14px;border-radius:10px';"
 "res.innerHTML='&#10007; Invalid OTP! Please check and try again.';"
@@ -1693,10 +1718,17 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f4f8;min-height:100vh
 
 @app.route("/api/approve-gate-pass", methods=["POST"])
 def approve_gate_pass():
-    data=request.get_json(); conn=get_db()
-    conn.execute("UPDATE gate_passes SET status='approved' WHERE id=?",(data.get("gate_pass_id"),))
+    data=request.get_json(); conn=get_db(); now=get_ist()
+    gp_id=data.get("gate_pass_id")
+    gp=conn.execute("SELECT * FROM gate_passes WHERE id=?",(gp_id,)).fetchone()
+    if not gp: conn.close(); return jsonify({"success":False})
+    gp=dict(gp)
+    conn.execute("UPDATE gate_passes SET status='approved',approved_at=? WHERE id=?",(now,gp_id))
+    # Water order for pantry
+    conn.execute("INSERT INTO pantry_orders (visitor_name,person_to_meet,drink,quantity,note,created_at,order_type) VALUES (?,?,?,?,?,?,?)",
+                 (gp["visitor_name"],gp["host_name"],"Water",1,"Guest arrived - Gate Pass",now,"gate_guest"))
     conn.commit(); conn.close()
-    return jsonify({"success":True})
+    return jsonify({"success":True,"visitor_name":gp["visitor_name"],"host_name":gp["host_name"],"gate_pass_id":gp_id})
 
 @app.route("/api/reject-gate-pass", methods=["POST"])
 def reject_gate_pass():
@@ -1719,6 +1751,33 @@ def all_gate_pass_entries():
     rows=conn.execute("SELECT * FROM gate_passes WHERE status IN ('gate_pending','approved','rejected','used') ORDER BY id DESC LIMIT 50").fetchall()
     conn.close()
     return jsonify({"entries":[dict(r) for r in rows]})
+
+
+@app.route("/api/gate-pass-approval-status")
+def gate_pass_approval_status():
+    conn=get_db()
+    row=conn.execute("SELECT * FROM gate_passes WHERE status IN ('approved','rejected') ORDER BY id DESC LIMIT 1").fetchone()
+    conn.close()
+    return jsonify({"entry":dict(row) if row else None})
+
+@app.route("/api/gate-pass-order-ready")
+def gate_pass_order_ready():
+    # Returns gate passes approved 7+ min ago where host hasn't ordered yet
+    conn=get_db()
+    from datetime import datetime as _dt, timedelta as _td
+    rows=conn.execute("SELECT * FROM gate_passes WHERE status='approved' AND approved_at IS NOT NULL ORDER BY id DESC LIMIT 10").fetchall()
+    ready=[]
+    for r in rows:
+        r=dict(r)
+        try:
+            approved_time=_dt.strptime(r["approved_at"],"%d-%m-%Y %H:%M:%S")
+        except:
+            try: approved_time=_dt.strptime(r["approved_at"],"%Y-%m-%d %H:%M:%S")
+            except: continue
+        if (_dt.now()-approved_time).total_seconds()>=420:
+            ready.append(r)
+    conn.close()
+    return jsonify({"passes":ready})
 
 @app.route("/sw.js")
 def service_worker():
