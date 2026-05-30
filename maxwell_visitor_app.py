@@ -1328,36 +1328,11 @@ if(Notification.permission==='default')Notification.requestPermission();
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js');}
 var _gp_pending={};
 async function checkGatePasses(){try{var r=await fetch('/api/host-pending-gate-passes');var d=await r.json();var sec=document.getElementById('gp-approval-sec');if(!sec)return;if(d.passes&&d.passes.length>0){sec.style.display='block';var html='';d.passes.forEach(function(p){if(!_gp_pending[p.id]){_gp_pending[p.id]=true;_beep(3);}html+='<div style="background:#FFF3E0;border:2px solid #FF9800;border-radius:12px;padding:14px;margin-bottom:10px">'+'<b style="color:#E65100">&#128203; Gate Pass Approval</b><br>'+'<b>'+p.visitor_name+'</b> arrived | '+p.purpose+'<div style="display:flex;gap:8px;margin-top:8px">'+'<button onclick="approveGP('+p.id+')" style="flex:1;padding:8px;background:#2E7D32;color:white;border:none;border-radius:8px;font-weight:700;cursor:pointer">&#10003; Approve</button>'+'<button onclick="rejectGP('+p.id+')" style="flex:1;padding:8px;background:#C62828;color:white;border:none;border-radius:8px;font-weight:700;cursor:pointer">&#10007; Reject</button>'+'</div></div>';});sec.innerHTML=html;}else{sec.style.display='none';}}catch(e){}}
-async function approveGP(id){var r=await fetch('/api/approve-gate-pass',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gate_pass_id:id})});var d=await r.json();_beep(2);delete _gp_pending[id];checkGatePasses();// Show water sent confirmation
-var sec=document.getElementById('gp-approval-sec');if(sec)sec.innerHTML='<div style="background:#E3F2FD;border:2px solid #1565C0;border-radius:12px;padding:14px;margin-bottom:10px">'+'<b style="color:#1565C0">&#128167; Water order sent to Pantry!</b><br>'+'<span style="font-size:12px;color:#666">Guest order table will open in 7 minutes</span></div>';}
+async function approveGP(id){var r=await fetch('/api/approve-gate-pass',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gate_pass_id:id})});var d=await r.json();_beep(2);delete _gp_pending[id];checkGatePasses();var sec=document.getElementById('gp-approval-sec');if(sec){sec.style.display='block';sec.innerHTML='<div style="background:#E3F2FD;border:2px solid #1565C0;border-radius:12px;padding:14px;margin-bottom:10px"><b style="color:#1565C0">&#128167; Water sent to Pantry! Order table opens in 7 min</b></div>';}}
 async function rejectGP(id){fetch('/api/reject-gate-pass',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gate_pass_id:id})}).then(function(){delete _gp_pending[id];checkGatePasses();});}
 setInterval(checkNew,8000);checkNew();setInterval(chkReveal,15000);chkReveal();
 setInterval(checkGatePasses,5000);checkGatePasses();
-var _gpOrderShown={};
-async function checkGpOrderReady(){
-try{var r=await fetch('/api/gate-pass-order-ready');var d=await r.json();
-if(d.passes&&d.passes.length>0){
-d.passes.forEach(function(p){
-if(_gpOrderShown[p.id])return;
-_gpOrderShown[p.id]=true;
-_beep(2);
-// Show order table same as normal visitor
-var container=document.getElementById('gp-approval-sec');
-if(!container)return;
-container.style.display='block';
-container.innerHTML='<div style="background:#FFF8E1;border:2px solid #FF9800;border-radius:12px;padding:16px;margin-bottom:10px">'+'<b style="color:#E65100;font-size:15px">&#9749; Guest Order — '+p.visitor_name+'</b><br>'+'<div style="margin-top:10px">'+'<select id="gp-drink-'+p.id+'" style="padding:8px;border-radius:8px;border:1px solid #ddd;font-size:14px;width:100%;margin-bottom:8px">'+'<option value="Tea">&#9749; Tea</option><option value="Coffee">&#9749; Coffee</option><option value="Juice">&#127815; Juice</option><option value="Water">&#128167; Water</option></select>'+'<button onclick="orderForGp('+p.id+',\''+p.visitor_name+'\')" style="width:100%;padding:10px;background:#1565C0;color:white;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer">&#128203; Place Order</button>'+'</div></div>';
-});}
-}catch(e){}}
-async function orderForGp(gpid,vname){
-var drink=document.getElementById('gp-drink-'+gpid);
-if(!drink)return;
-await fetch('/api/order-beverage',{method:'POST',headers:{'Content-Type':'application/json'},
-body:JSON.stringify({visitor_name:vname,drink:drink.value,quantity:1,note:'Gate Pass Guest'})});
-_beep(2);
-document.getElementById('gp-approval-sec').innerHTML='<div style="background:#E8F5E9;color:#2E7D32;border-radius:12px;padding:14px;text-align:center">&#10003; Order placed!</div>';
-_gpOrderShown[gpid]=true;}
-setInterval(checkGpOrderReady,30000);checkGpOrderReady();
-</script></body></html>""").replace("MLOGO",LOGO_MAIN).replace("EPHOTO",emp_photo).replace("EPHOTO2",emp_photo).replace("EMPNAME",name).replace("EMPEMAIL",email).replace("EMPDEPT",emp_dept).replace("EMPDESIG",emp_desig)
+var _gpOrderShown={};async function checkGpOrderReady(){try{var r=await fetch('/api/gate-pass-order-ready');var d=await r.json();if(d.passes&&d.passes.length>0){d.passes.forEach(function(p){if(_gpOrderShown[p.id])return;_gpOrderShown[p.id]=true;_beep(2);var container=document.getElementById('gp-approval-sec');if(!container)return;container.style.display='block';container.innerHTML='<div style="background:#FFF8E1;border:2px solid #FF9800;border-radius:12px;padding:16px;margin-bottom:10px">'+'<b style="color:#E65100">&#9749; Guest Order — '+p.visitor_name+'</b>'+'<div style="margin-top:10px"><select id="gp-drink-'+p.id+'" style="padding:8px;border-radius:8px;border:1px solid #ddd;font-size:14px;width:100%;margin-bottom:8px">'+'<option value="Tea">&#9749; Tea</option><option value="Coffee">&#9749; Coffee</option><option value="Juice">&#127815; Juice</option><option value="Water">&#128167; Water</option></select>'+'<button onclick="orderForGp('+p.id+',\''+p.visitor_name+'\')" style="width:100%;padding:10px;background:#1565C0;color:white;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer">&#128203; Place Order</button></div></div>';});}else{var c=document.getElementById('gp-approval-sec');if(c&&!Object.keys(_gpOrderShown).length)c.style.display='none';}}catch(e){}}async function orderForGp(gpid,vname){var drink=document.getElementById('gp-drink-'+gpid);if(!drink)return;await fetch('/api/order-beverage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({visitor_name:vname,drink:drink.value,quantity:1,note:'Gate Pass Guest'})});_beep(2);document.getElementById('gp-approval-sec').innerHTML='<div style="background:#E8F5E9;color:#2E7D32;border-radius:12px;padding:14px;text-align:center">&#10003; Order placed!</div>';_gpOrderShown[gpid]=true;}setInterval(checkGpOrderReady,30000);checkGpOrderReady();</script></body></html>""").replace("MLOGO",LOGO_MAIN).replace("EPHOTO",emp_photo).replace("EPHOTO2",emp_photo).replace("EMPNAME",name).replace("EMPEMAIL",email).replace("EMPDEPT",emp_dept).replace("EMPDESIG",emp_desig)
 
 @app.route("/employee-logout")
 def employee_logout():
