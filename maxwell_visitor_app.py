@@ -767,35 +767,6 @@ def admin():
             "if(d3.meeting&&d3.meeting.id>_sl){_beep(2);showNB('&#128197; Meeting scheduled: '+d3.meeting.visitor_name+' with '+d3.meeting.host_name,12000);_sl=d3.meeting.id;}"
             "}catch(e){}}"
             "if(Notification.permission==='default')Notification.requestPermission();"
-            "var _gp_pending={};"
-            "async function checkGatePasses(){"
-            "try{var r=await fetch('/api/host-pending-gate-passes');var d=await r.json();"
-            "var sec=document.getElementById('gp-approval-sec');"
-            "if(!sec)return;"
-            "if(d.passes&&d.passes.length>0){"
-            "sec.style.display='block';"
-            "var html='';"
-            "d.passes.forEach(function(p){"
-            "if(!_gp_pending[p.id]){_gp_pending[p.id]=true;_beep(3);}"
-            "html+='<div style=\"background:#FFF3E0;border:2px solid #FF9800;border-radius:12px;padding:14px;margin-bottom:10px\">'+"
-            "'<div style=\"font-size:15px;font-weight:700;color:#E65100;margin-bottom:6px\">&#128203; Gate Pass Approval</div>'+"
-            "'<b>'+p.visitor_name+'</b> has arrived<br><span style=\"font-size:12px;color:#666\">Purpose: '+p.purpose+'</span>'+"
-            "'<div style=\"display:flex;gap:10px;margin-top:10px\">'+"
-            "'<button onclick=\"approveGP('+p.id+')\' style=\"flex:1;padding:10px;background:#2E7D32;color:white;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer\">&#10003; Approve</button>'+"
-            "'<button onclick=\"rejectGP('+p.id+')\' style=\"flex:1;padding:10px;background:#C62828;color:white;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer\">&#10007; Reject</button>'+"
-            "'</div></div>';"
-            "});"
-            "sec.innerHTML=html;"
-            "}else{sec.style.display='none';}"
-            "}catch(e){}}"
-            "async function approveGP(id){"
-            "await fetch('/api/approve-gate-pass',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gate_pass_id:id})});"
-            "_beep(2);delete _gp_pending[id];checkGatePasses();}"
-            "async function rejectGP(id){"
-            "await fetch('/api/reject-gate-pass',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gate_pass_id:id})});"
-            "delete _gp_pending[id];checkGatePasses();}"
-            "setInterval(checkNew,8000);checkNew();setInterval(checkAVO,15000);checkAVO();"
-            "setInterval(checkGatePasses,5000);checkGatePasses();"
             "</script></body></html>")
 
 @app.route("/admin-login", methods=["POST"])
@@ -1355,7 +1326,12 @@ async function checkNew(){try{
   document.title=d1.count>0?'('+d1.count+') \\u00B7 """+name+"""':'"""+name+""" \\u00B7 Maxwell';}catch(e){}}
 if(Notification.permission==='default')Notification.requestPermission();
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js');}
+var _gp_pending={};
+async function checkGatePasses(){try{var r=await fetch('/api/host-pending-gate-passes');var d=await r.json();var sec=document.getElementById('gp-approval-sec');if(!sec)return;if(d.passes&&d.passes.length>0){sec.style.display='block';var html='';d.passes.forEach(function(p){if(!_gp_pending[p.id]){_gp_pending[p.id]=true;_beep(3);}html+='<div style="background:#FFF3E0;border:2px solid #FF9800;border-radius:12px;padding:14px;margin-bottom:10px">'+'<b style="color:#E65100">&#128203; Gate Pass Approval</b><br>'+'<b>'+p.visitor_name+'</b> arrived | '+p.purpose+'<div style="display:flex;gap:8px;margin-top:8px">'+'<button onclick="approveGP('+p.id+')" style="flex:1;padding:8px;background:#2E7D32;color:white;border:none;border-radius:8px;font-weight:700;cursor:pointer">&#10003; Approve</button>'+'<button onclick="rejectGP('+p.id+')" style="flex:1;padding:8px;background:#C62828;color:white;border:none;border-radius:8px;font-weight:700;cursor:pointer">&#10007; Reject</button>'+'</div></div>';});sec.innerHTML=html;}else{sec.style.display='none';}}catch(e){}}
+async function approveGP(id){fetch('/api/approve-gate-pass',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gate_pass_id:id})}).then(function(){_beep(2);delete _gp_pending[id];checkGatePasses();});}
+async function rejectGP(id){fetch('/api/reject-gate-pass',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gate_pass_id:id})}).then(function(){delete _gp_pending[id];checkGatePasses();});}
 setInterval(checkNew,8000);checkNew();setInterval(chkReveal,15000);chkReveal();
+setInterval(checkGatePasses,5000);checkGatePasses();
 </script></body></html>""").replace("MLOGO",LOGO_MAIN).replace("EPHOTO",emp_photo).replace("EPHOTO2",emp_photo).replace("EMPNAME",name).replace("EMPEMAIL",email).replace("EMPDEPT",emp_dept).replace("EMPDESIG",emp_desig)
 
 @app.route("/employee-logout")
