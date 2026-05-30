@@ -68,6 +68,37 @@ def get_ist():
 def hash_pw(pw):
     return hashlib.sha256(pw.encode()).hexdigest()
 
+def create_auth_token(user_type, user_email, user_name):
+    import secrets as _sec
+    token=_sec.token_urlsafe(32)
+    now=datetime.now()
+    expires=(now+__import__('datetime').timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
+    now_str=now.strftime("%Y-%m-%d %H:%M:%S")
+    conn=get_db()
+    conn.execute("INSERT OR REPLACE INTO auth_tokens (token,user_type,user_email,user_name,created_at,expires_at) VALUES (?,?,?,?,?,?)",
+                 (token,user_type,user_email,user_name,now_str,expires))
+    conn.commit(); conn.close()
+    return token
+
+def verify_auth_token(token):
+    if not token: return None
+    conn=get_db()
+    row=conn.execute("SELECT * FROM auth_tokens WHERE token=?",(token,)).fetchone()
+    conn.close()
+    if not row: return None
+    from datetime import datetime as _dt
+    try:
+        if _dt.now() > _dt.strptime(row["expires_at"],"%Y-%m-%d %H:%M:%S"):
+            return None
+    except: pass
+    return dict(row)
+
+def delete_auth_token(token):
+    if not token: return
+    conn=get_db()
+    conn.execute("DELETE FROM auth_tokens WHERE token=?",(token,))
+    conn.commit(); conn.close()
+
 def init_db():
     conn = sqlite3.connect(DB)
     conn.execute("""CREATE TABLE IF NOT EXISTS visitors (
@@ -116,6 +147,12 @@ def init_db():
         host_name TEXT, visitor_name TEXT, visitor_phone TEXT,
         purpose TEXT, otp TEXT, valid_from TEXT, valid_till TEXT,
         created_at TEXT, status TEXT DEFAULT 'active', approved_at TEXT
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS auth_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        token TEXT UNIQUE, user_type TEXT,
+        user_email TEXT, user_name TEXT,
+        created_at TEXT, expires_at TEXT
     )""")
     conn.execute("INSERT OR IGNORE INTO app_settings (key,value) VALUES ('admin_pin','1234')")
     conn.execute("INSERT OR IGNORE INTO app_settings (key,value) VALUES ('security_pass','1234')")
@@ -178,6 +215,7 @@ BEEP_JS = ("var _audioCtx=null;"
     "var ok=document.getElementById('snd-ok');if(ok){ok.style.display='block';setTimeout(function(){ok.style.display='none';},2000);}}"
     "setTimeout(function(){var b=document.getElementById('snd-btn');if(b)b.style.display='flex';},800);")
 
+
 SOUND_WIDGET = ("<div id='snd-btn' onclick='_enableSound()' style='display:none;position:fixed;bottom:20px;right:20px;"
     "background:#1565C0;color:white;padding:11px 18px;border-radius:30px;cursor:pointer;"
     "font-weight:700;font-size:13px;box-shadow:0 4px 15px rgba(0,0,0,0.3);z-index:9999;"
@@ -185,6 +223,10 @@ SOUND_WIDGET = ("<div id='snd-btn' onclick='_enableSound()' style='display:none;
     "<div id='snd-ok' style='display:none;position:fixed;bottom:20px;right:20px;"
     "background:#2E7D32;color:white;padding:11px 18px;border-radius:30px;"
     "font-weight:700;font-size:13px;z-index:9999'>&#10003; Sound On!</div>")
+
+GP_ORDER_JS = ("var _gpOrderShown={};async function checkGpOrderReady(){try{var r=await fetch('/api/gate-pass-order-ready');var d=await r.json();if(d.passes&&d.passes.length>0){d.passes.forEach(function(p){var eid='gp-card-'+p.id;var container=document.getElementById('gp-approval-sec');if(!container)return;container.style.display='block';if(document.getElementById(eid))return;if(!_gpOrderShown[p.id]){_gpOrderShown[p.id]=true;_beep(2);}var card=document.createElement('div');card.id=eid;card.style.cssText='background:#FFF8E1;border:2px solid #FF9800;border-radius:14px;padding:16px;margin-bottom:12px';card.innerHTML='<div style=\"display:flex;align-items:center;gap:8px;margin-bottom:12px\">'+'<span style=\"font-size:20px\">&#9749;</span>'+'<b style=\"color:#E65100\">Guest: '+p.visitor_name+'</b>'+'</div>'+'<div class=\"ob\"><div class=\"ob-title\">&#9749; Order Drink</div>'+'<div class=\"drink-row\">'+'<select id=\"gp-drk-'+p.id+'\" class=\"drink-sel\">'+'<option value=\"\">Select...</option>'+'<option>Water</option><option>Tea</option><option>Coffee</option>'+'<option>Green Tea</option><option>Black Coffee</option>'+'<option>Juice</option><option>Other</option>'+'</select>'+'<div class=\"qty-wrap\">'+'<button class=\"qty-btn\" onclick=\"var q=getElementById(\'gq'+p.id+'\');q&&(q.textContent=Math.max(1,parseInt(q.textContent)-1))\">-</button>'+'<span id=\"gq'+p.id+'\" class=\"qty-num\">1</span>'+'<button class=\"qty-btn\" onclick=\"var q=getElementById(\'gq'+p.id+'\');q&&(q.textContent=parseInt(q.textContent)+1)\">+</button>'+'</div></div></div>'+'<div class=\"ob\" style=\"margin-top:8px\"><div class=\"ob-title\">&#127839; Snacks</div>'+'<input type=\"text\" id=\"gs'+p.id+'\" class=\"si\" placeholder=\"e.g. Biscuits...\"></div>'+'<div class=\"ob\" style=\"margin-top:8px\"><div class=\"ob-title\">&#128203; Note</div>'+'<input type=\"text\" id=\"gn'+p.id+'\" class=\"si\" placeholder=\"e.g. Less sugar...\"></div>'+'<button onclick=\"gOrder('+p.id+')\" class=\"sv-btn\" style=\"margin-top:10px\">&#128203; Place Order</button>';container.appendChild(card);});}else{var c=document.getElementById('gp-approval-sec');if(c&&!Object.keys(_gpOrderShown).length)c.style.display='none';}}catch(e){}}async function gOrder(gpid){var drk=document.getElementById('gp-drk-'+gpid);if(!drk||!drk.value){alert('Please select a drink!');return;}var dv=drk.value;var qv=parseInt((document.getElementById('gq'+gpid)||{textContent:'1'}).textContent)||1;var sv=(document.getElementById('gs'+gpid)||{value:''}).value;var nv=(document.getElementById('gn'+gpid)||{value:'Gate Pass Guest'}).value||'Gate Pass Guest';await fetch('/api/order-beverage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({visitor_name:'Gate Pass Guest',drink:dv,quantity:qv,snacks:sv,note:nv,order_type:'gate_guest'})});_beep(2);var card=document.getElementById('gp-card-'+gpid);if(card){card.innerHTML='<div style=\"text-align:center;padding:10px;color:#2E7D32;font-weight:700\">&#10003; '+dv+' x'+qv+' ordered! Pantry notified.</div>';}}setInterval(checkGpOrderReady,30000);checkGpOrderReady();")
+
+
 
 HEADER_CSS = """.header{background:#1565C0;padding:14px 20px 10px;display:flex;flex-direction:column;align-items:center;box-shadow:0 2px 10px rgba(0,0,0,0.25)}
 .hdr-logo-wrap{display:flex;justify-content:center;width:100%;margin-bottom:8px}
@@ -1380,7 +1422,7 @@ async function approveGP(id){var r=await fetch('/api/approve-gate-pass',{method:
 async function rejectGP(id){fetch('/api/reject-gate-pass',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gate_pass_id:id})}).then(function(){delete _gp_pending[id];checkGatePasses();});}
 setInterval(checkNew,8000);checkNew();setInterval(chkReveal,15000);chkReveal();
 setInterval(checkGatePasses,5000);checkGatePasses();
-var _gpOrderShown={};async function checkGpOrderReady(){try{var r=await fetch('/api/gate-pass-order-ready');var d=await r.json();if(d.passes&&d.passes.length>0){d.passes.forEach(function(p){var eid='gp-card-'+p.id;var container=document.getElementById('gp-approval-sec');if(!container)return;container.style.display='block';if(document.getElementById(eid))return;if(!_gpOrderShown[p.id]){_gpOrderShown[p.id]=true;_beep(2);}var card=document.createElement('div');card.id=eid;card.style.cssText='background:#FFF8E1;border:2px solid #FF9800;border-radius:14px;padding:16px;margin-bottom:12px';card.innerHTML='<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">'+'<span style="font-size:20px">&#9749;</span>'+'<div><b style="color:#E65100;font-size:15px">Guest: '+p.visitor_name+'</b>'+'<div style="font-size:12px;color:#999">Gate Pass Guest</div></div></div>'+'<div class="ob"><div class="ob-title">&#9749; Order Drink</div>'+'<div class="drink-row">'+'<select id="gp-drk-'+p.id+'" class="drink-sel">'+'<option value="">Select drink...</option>'+'<option value="Water">Water</option>'+'<option value="Tea">Tea</option>'+'<option value="Coffee">Coffee</option>'+'<option value="Green Tea">Green Tea</option>'+'<option value="Black Coffee">Black Coffee</option>'+'<option value="Juice">Juice</option>'+'<option value="Other">Other</option>'+'</select>'+'<div class="qty-wrap">'+'<button class="qty-btn" onclick="var q=document.getElementById(\'gp-qty-'+p.id+'\');if(parseInt(q.textContent)>1)q.textContent=parseInt(q.textContent)-1">-</button>'+'<span id="gp-qty-'+p.id+'" class="qty-num">1</span>'+'<button class="qty-btn" onclick="var q=document.getElementById(\'gp-qty-'+p.id+'\');q.textContent=parseInt(q.textContent)+1">+</button>'+'</div></div></div>'+'<div class="ob" style="margin-top:10px"><div class="ob-title">&#127839; Snacks</div>'+'<input type="text" id="gp-snk-'+p.id+'" placeholder="e.g. Biscuits..." class="snk-inp"></div>'+'<div class="ob" style="margin-top:10px"><div class="ob-title">&#128203; Note</div>'+'<input type="text" id="gp-nte-'+p.id+'" placeholder="e.g. Less sugar..." class="snk-inp"></div>'+'<button onclick="orderForGp('+p.id+')" class="sv-btn" style="margin-top:12px">&#128203; Place Order</button>';container.appendChild(card);});}}catch(e){}}async function orderForGp(gpid){var drk=document.getElementById('gp-drk-'+gpid);var qty=document.getElementById('gp-qty-'+gpid);var snk=document.getElementById('gp-snk-'+gpid);var nte=document.getElementById('gp-nte-'+gpid);if(!drk||!drk.value){alert('Please select a drink!');return;}var dv=drk.value;var qv=qty?parseInt(qty.textContent)||1:1;var sv=snk?snk.value:'';var nv=nte?nte.value:'Gate Pass Guest';await fetch('/api/order-beverage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({visitor_name:'Gate Pass Guest',drink:dv,quantity:qv,snacks:sv,note:nv,order_type:'gate_guest'})});_beep(2);var card=document.getElementById('gp-card-'+gpid);if(card){card.style.background='#E8F5E9';card.style.borderColor='#2E7D32';card.innerHTML='<div style="text-align:center;padding:10px;color:#2E7D32;font-weight:700">&#10003; '+dv+' x'+qv+' ordered!</div>';}}setInterval(checkGpOrderReady,30000);checkGpOrderReady();</script></body></html>""").replace("MLOGO",LOGO_MAIN).replace("EPHOTO",emp_photo).replace("EPHOTO2",emp_photo).replace("EMPNAME",name).replace("EMPEMAIL",email).replace("EMPDEPT",emp_dept).replace("EMPDESIG",emp_desig)
+"""+GP_ORDER_JS+"""</script></body></html>""").replace("MLOGO",LOGO_MAIN).replace("EPHOTO",emp_photo).replace("EPHOTO2",emp_photo).replace("EMPNAME",name).replace("EMPEMAIL",email).replace("EMPDEPT",emp_dept).replace("EMPDESIG",emp_desig)
 
 @app.route("/employee-logout")
 def employee_logout():
