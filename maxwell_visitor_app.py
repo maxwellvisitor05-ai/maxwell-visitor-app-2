@@ -1749,7 +1749,9 @@ def gate_pass_order_ready():
         except:
             try: approved_time=_dt.strptime(r["approved_at"],"%d-%m-%Y %H:%M:%S")
             except: continue
-        if (_dt.now()-approved_time).total_seconds()>=420:
+        from datetime import timezone as _tz, timedelta as _tda
+        ist_now=_dt.now(_tz((_tda(hours=5,minutes=30)))).replace(tzinfo=None)
+        if (ist_now-approved_time).total_seconds()>=420:
             ready.append(r)
     conn.close()
     return jsonify({"passes":ready})
