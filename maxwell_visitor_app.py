@@ -1745,9 +1745,9 @@ def gate_pass_order_ready():
     for r in rows:
         r=dict(r)
         try:
-            approved_time=_dt.strptime(r["approved_at"],"%d-%m-%Y %H:%M:%S")
+            approved_time=_dt.strptime(r["approved_at"],"%d-%m-%Y %H:%M")
         except:
-            try: approved_time=_dt.strptime(r["approved_at"],"%Y-%m-%d %H:%M:%S")
+            try: approved_time=_dt.strptime(r["approved_at"],"%d-%m-%Y %H:%M:%S")
             except: continue
         if (_dt.now()-approved_time).total_seconds()>=420:
             ready.append(r)
