@@ -826,21 +826,68 @@ def export_excel():
     if dept: query+=" AND department=?"; params.append(dept)
     if status: query+=" AND status=?"; params.append(status)
     query+=" ORDER BY id DESC"
-    visitors=[dict(r) for r in conn.execute(query,params).fetchall()]; conn.close()
-    wb=openpyxl.Workbook(); ws=wb.active; ws.title="Visitor Report"
+    visitors=[dict(r) for r in conn.execute(query,params).fetchall()]
+    gate_passes=[dict(r) for r in conn.execute("SELECT * FROM gate_passes ORDER BY id DESC").fetchall()]
+    conn.close()
+    wb=openpyxl.Workbook()
+
+    # ── Sheet 1: Normal Visitors ──
+    ws=wb.active; ws.title="Visitor Report"
     hf=PatternFill("solid",fgColor="1565C0"); hfnt=Font(color="FFFFFF",bold=True,size=12)
-    headers=["#","Name","Phone","Person","Dept","Category","Purpose","Status","Pass","In Time","Out Time","Exit Time"]
+    headers=["#","Photo","Name","Phone","Person","Dept","Category","Purpose","Status","Pass","In Time","Out Time","Exit Time","ID Doc","ID Number"]
     for col,h in enumerate(headers,1):
         cell=ws.cell(row=1,column=col,value=h); cell.fill=hf; cell.font=hfnt; cell.alignment=Alignment(horizontal="center")
     ws.row_dimensions[1].height=25
-    for i,w in enumerate([5,20,14,20,14,14,24,12,18,18,18,18],1):
+    for i,w in enumerate([5,12,20,14,20,14,14,24,12,18,18,18,18,14,18],1):
         ws.column_dimensions[chr(64+i)].width=w
     for row,v in enumerate(visitors,2):
+        ws.row_dimensions[row].height=55
         ws.cell(row=row,column=1,value=row-1)
-        for ci,key in enumerate(["name","phone","person_to_meet","department","category","purpose","status","pass_number","created_at","checkout_at","exit_at"],2):
+        # Photo
+        photo_data=v.get("photo","") or ""
+        if photo_data and photo_data.startswith("data:image"):
+            try:
+                import base64 as _b64
+                header,data=photo_data.split(",",1)
+                img_data=_b64.b64decode(data)
+                img=openpyxl.drawing.image.Image(io.BytesIO(img_data))
+                img.width=50; img.height=50
+                img.anchor=f"B{row}"
+                ws.add_image(img)
+            except: ws.cell(row=row,column=2,value="Photo")
+        # Data columns
+        for ci,key in enumerate(["name","phone","person_to_meet","department","category","purpose","status","pass_number","created_at","checkout_at","exit_at","id_type","id_number"],3):
             ws.cell(row=row,column=ci,value=v.get(key,"") or "-")
+        # Legal doc image
+        doc_data=v.get("id_photo","") or v.get("document_photo","") or ""
+        if doc_data and doc_data.startswith("data:image"):
+            try:
+                header,data=doc_data.split(",",1)
+                img_data=_b64.b64decode(data)
+                img2=openpyxl.drawing.image.Image(io.BytesIO(img_data))
+                img2.width=80; img2.height=50
+                img2.anchor=f"N{row}"
+                ws.add_image(img2)
+            except: pass
         fill=PatternFill("solid",fgColor="E8F5E9" if v.get("status")=="approved" else "FFEBEE" if v.get("status")=="rejected" else "FFF8E1")
-        for ci in range(2,13): ws.cell(row=row,column=ci).fill=fill
+        for ci in range(3,16): ws.cell(row=row,column=ci).fill=fill
+
+    # ── Sheet 2: Gate Pass Visitors ──
+    ws2=wb.create_sheet("Gate Pass Visitors")
+    headers2=["#","Visitor","Phone","Host","Purpose","OTP","Status","Valid From","Valid Till","Created"]
+    for col,h in enumerate(headers2,1):
+        cell=ws2.cell(row=1,column=col,value=h); cell.fill=hf; cell.font=hfnt; cell.alignment=Alignment(horizontal="center")
+    ws2.row_dimensions[1].height=25
+    for i,w in enumerate([5,22,14,22,22,12,14,20,20,20],1):
+        ws2.column_dimensions[chr(64+i)].width=w
+    for row,gp in enumerate(gate_passes,2):
+        ws2.cell(row=row,column=1,value=row-1)
+        for ci,key in enumerate(["visitor_name","visitor_phone","host_name","purpose","otp","status","valid_from","valid_till","created_at"],2):
+            ws2.cell(row=row,column=ci,value=gp.get(key,"") or "-")
+        sc={"approved":"E8F5E9","rejected":"FFEBEE","gate_pending":"FFF3E0"}.get(gp.get("status",""),"FFFFFF")
+        fill=PatternFill("solid",fgColor=sc)
+        for ci in range(2,11): ws2.cell(row=row,column=ci).fill=fill
+
     buf=io.BytesIO(); wb.save(buf); buf.seek(0)
     filename="Maxwell_Visitors_"+datetime.now().strftime("%d%m%Y")+".xlsx"
     return send_file(buf,as_attachment=True,download_name=filename,mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -1332,7 +1379,7 @@ async function approveGP(id){var r=await fetch('/api/approve-gate-pass',{method:
 async function rejectGP(id){fetch('/api/reject-gate-pass',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gate_pass_id:id})}).then(function(){delete _gp_pending[id];checkGatePasses();});}
 setInterval(checkNew,8000);checkNew();setInterval(chkReveal,15000);chkReveal();
 setInterval(checkGatePasses,5000);checkGatePasses();
-var _gpOrderShown={};async function checkGpOrderReady(){try{var r=await fetch('/api/gate-pass-order-ready');var d=await r.json();if(d.passes&&d.passes.length>0){d.passes.forEach(function(p){if(_gpOrderShown[p.id])return;_gpOrderShown[p.id]=true;_beep(2);var container=document.getElementById('gp-approval-sec');if(!container)return;container.style.display='block';container.innerHTML='<div style="background:#FFF8E1;border:2px solid #FF9800;border-radius:12px;padding:16px;margin-bottom:10px">'+'<b style="color:#E65100">&#9749; Guest Order — '+p.visitor_name+'</b>'+'<div style="margin-top:10px"><select id="gp-drink-'+p.id+'" style="padding:8px;border-radius:8px;border:1px solid #ddd;font-size:14px;width:100%;margin-bottom:8px">'+'<option value="Tea">&#9749; Tea</option><option value="Coffee">&#9749; Coffee</option><option value="Juice">&#127815; Juice</option><option value="Water">&#128167; Water</option></select>'+'<button onclick="orderForGp('+p.id+')" style="width:100%;padding:10px;background:#1565C0;color:white;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer">&#128203; Place Order</button></div></div>';});}else{var c=document.getElementById('gp-approval-sec');if(c&&!Object.keys(_gpOrderShown).length)c.style.display='none';}}catch(e){}}async function orderForGp(gpid){var drink=document.getElementById('gp-drink-'+gpid);if(!drink)return;await fetch('/api/order-beverage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({visitor_name:'Guest',drink:drink.value,quantity:1,note:'Gate Pass Guest'})});_beep(2);document.getElementById('gp-approval-sec').innerHTML='<div style="background:#E8F5E9;color:#2E7D32;border-radius:12px;padding:14px;text-align:center">&#10003; Order placed!</div>';_gpOrderShown[gpid]=true;}setInterval(checkGpOrderReady,30000);checkGpOrderReady();</script></body></html>""").replace("MLOGO",LOGO_MAIN).replace("EPHOTO",emp_photo).replace("EPHOTO2",emp_photo).replace("EMPNAME",name).replace("EMPEMAIL",email).replace("EMPDEPT",emp_dept).replace("EMPDESIG",emp_desig)
+var _gpOrderShown={};async function checkGpOrderReady(){try{var r=await fetch('/api/gate-pass-order-ready');var d=await r.json();if(d.passes&&d.passes.length>0){d.passes.forEach(function(p){var eid='gp-card-'+p.id;var container=document.getElementById('gp-approval-sec');if(!container)return;container.style.display='block';if(document.getElementById(eid))return;if(!_gpOrderShown[p.id]){_gpOrderShown[p.id]=true;_beep(2);}var card=document.createElement('div');card.id=eid;card.style.cssText='background:#FFF8E1;border:2px solid #FF9800;border-radius:14px;padding:16px;margin-bottom:12px';card.innerHTML='<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">'+'<span style="font-size:20px">&#9749;</span>'+'<div><b style="color:#E65100;font-size:15px">Guest: '+p.visitor_name+'</b>'+'<div style="font-size:12px;color:#999">Gate Pass Guest</div></div></div>'+'<div class="ob"><div class="ob-title">&#9749; Order Drink</div>'+'<div class="drink-row">'+'<select id="gp-drk-'+p.id+'" class="drink-sel">'+'<option value="">Select drink...</option>'+'<option value="Water">Water</option>'+'<option value="Tea">Tea</option>'+'<option value="Coffee">Coffee</option>'+'<option value="Green Tea">Green Tea</option>'+'<option value="Black Coffee">Black Coffee</option>'+'<option value="Juice">Juice</option>'+'<option value="Other">Other</option>'+'</select>'+'<div class="qty-wrap">'+'<button class="qty-btn" onclick="var q=document.getElementById(\'gp-qty-'+p.id+'\');if(parseInt(q.textContent)>1)q.textContent=parseInt(q.textContent)-1">-</button>'+'<span id="gp-qty-'+p.id+'" class="qty-num">1</span>'+'<button class="qty-btn" onclick="var q=document.getElementById(\'gp-qty-'+p.id+'\');q.textContent=parseInt(q.textContent)+1">+</button>'+'</div></div></div>'+'<div class="ob" style="margin-top:10px"><div class="ob-title">&#127839; Snacks</div>'+'<input type="text" id="gp-snk-'+p.id+'" placeholder="e.g. Biscuits..." class="snk-inp"></div>'+'<div class="ob" style="margin-top:10px"><div class="ob-title">&#128203; Note</div>'+'<input type="text" id="gp-nte-'+p.id+'" placeholder="e.g. Less sugar..." class="snk-inp"></div>'+'<button onclick="orderForGp('+p.id+')" class="sv-btn" style="margin-top:12px">&#128203; Place Order</button>';container.appendChild(card);});}}catch(e){}}async function orderForGp(gpid){var drk=document.getElementById('gp-drk-'+gpid);var qty=document.getElementById('gp-qty-'+gpid);var snk=document.getElementById('gp-snk-'+gpid);var nte=document.getElementById('gp-nte-'+gpid);if(!drk||!drk.value){alert('Please select a drink!');return;}var dv=drk.value;var qv=qty?parseInt(qty.textContent)||1:1;var sv=snk?snk.value:'';var nv=nte?nte.value:'Gate Pass Guest';await fetch('/api/order-beverage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({visitor_name:'Gate Pass Guest',drink:dv,quantity:qv,snacks:sv,note:nv})});_beep(2);var card=document.getElementById('gp-card-'+gpid);if(card){card.style.background='#E8F5E9';card.style.borderColor='#2E7D32';card.innerHTML='<div style="text-align:center;padding:10px;color:#2E7D32;font-weight:700">&#10003; '+dv+' x'+qv+' ordered!</div>';}}setInterval(checkGpOrderReady,30000);checkGpOrderReady();</script></body></html>""").replace("MLOGO",LOGO_MAIN).replace("EPHOTO",emp_photo).replace("EPHOTO2",emp_photo).replace("EMPNAME",name).replace("EMPEMAIL",email).replace("EMPDEPT",emp_dept).replace("EMPDESIG",emp_desig)
 
 @app.route("/employee-logout")
 def employee_logout():
@@ -1737,24 +1784,50 @@ def gate_pass_approval_status():
 
 @app.route("/api/gate-pass-order-ready")
 def gate_pass_order_ready():
-    # Returns gate passes approved 7+ min ago where host hasn't ordered yet
+    if "emp_name" not in session: return jsonify({"passes":[]})
     conn=get_db()
-    from datetime import datetime as _dt, timedelta as _td
-    rows=conn.execute("SELECT * FROM gate_passes WHERE status='approved' AND approved_at IS NOT NULL ORDER BY id DESC LIMIT 10").fetchall()
+    from datetime import datetime as _dt,timezone as _tz,timedelta as _tda
+    ist_now=_dt.now(_tz(_tda(hours=5,minutes=30))).replace(tzinfo=None)
+    rows=conn.execute("SELECT * FROM gate_passes WHERE status='approved' AND approved_at IS NOT NULL AND host_name=? ORDER BY id DESC LIMIT 10",(session["emp_name"],)).fetchall()
     ready=[]
     for r in rows:
         r=dict(r)
         try:
-            approved_time=_dt.strptime(r["approved_at"],"%d-%m-%Y %H:%M")
-        except:
-            try: approved_time=_dt.strptime(r["approved_at"],"%d-%m-%Y %H:%M:%S")
-            except: continue
-        from datetime import timezone as _tz, timedelta as _tda
-        ist_now=_dt.now(_tz((_tda(hours=5,minutes=30)))).replace(tzinfo=None)
-        if (ist_now-approved_time).total_seconds()>=420:
-            ready.append(r)
+            for fmt in ["%d-%m-%Y %H:%M","%d-%m-%Y %H:%M:%S","%Y-%m-%d %H:%M:%S","%Y-%m-%d %H:%M"]:
+                try: approved_time=_dt.strptime(r["approved_at"],fmt); break
+                except: continue
+            else: continue
+            diff=(ist_now-approved_time).total_seconds()
+            if diff>=420:
+                ready.append(r)
+        except: continue
     conn.close()
     return jsonify({"passes":ready})
+
+
+@app.route("/api/debug-gate-passes")
+def debug_gate_passes():
+    conn=get_db()
+    rows=conn.execute("SELECT id,host_name,status,approved_at,created_at FROM gate_passes ORDER BY id DESC LIMIT 5").fetchall()
+    conn.close()
+    from datetime import datetime as _dt,timezone as _tz,timedelta as _tda
+    ist_now=_dt.now(_tz(_tda(hours=5,minutes=30))).replace(tzinfo=None)
+    result=[]
+    for r in rows:
+        r=dict(r)
+        r["ist_now"]=str(ist_now)
+        if r["approved_at"]:
+            for fmt in ["%d-%m-%Y %H:%M","%d-%m-%Y %H:%M:%S","%Y-%m-%d %H:%M:%S","%Y-%m-%d %H:%M"]:
+                try:
+                    t=_dt.strptime(r["approved_at"],fmt)
+                    r["parsed_ok"]=fmt
+                    r["diff_seconds"]=(ist_now-t).total_seconds()
+                    break
+                except: continue
+            else:
+                r["parsed_ok"]="FAILED"
+        result.append(r)
+    return jsonify(result)
 
 @app.route("/sw.js")
 def service_worker():
