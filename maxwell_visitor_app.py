@@ -1211,8 +1211,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-s
 """+SOUND_WIDGET+
 ("""<div class="ab"><div class="ab-left"><span>&#128274;</span><span>Please change your default password!</span></div><a href="/change-password" class="ab-link">Change Now</a></div>""" if force_change else "")+
 """<div class="nb" id="nb-bar"></div>
-<div id="gp-approval-sec" style="display:none;padding:0 14px 10px"></div>
 <div class="pg">
+<div id="gp-approval-sec" style="display:none;padding:0 0 10px 0"></div>
 <div class="sc"><div class="sc-hdr"><div class="sc-ttl"><div class="sc-ico">&#128100;</div>Active Visitors</div></div>"""+active_cards+"""</div>
 <div class="sw"><div class="sr">
   <div class="si2 c1"><div class="si2-ico">&#128101;</div><div class="si2-num">"""+str(today_count)+"""</div><div class="si2-lbl">Today</div></div>
