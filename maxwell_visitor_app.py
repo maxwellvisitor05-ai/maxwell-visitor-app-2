@@ -1401,7 +1401,6 @@ function showPend(){document.getElementById('pend-sc').style.display='block';doc
 function openSchedMo(){document.getElementById('sched-mo').classList.add('open');}
 function closeSchedMo(){document.getElementById('sched-mo').classList.remove('open');}
 function openMo(){document.getElementById('mo').classList.add('open');}
-function openSchedMo(){document.getElementById('sched-mo').classList.add('open');}
 function closeSchedMo(){document.getElementById('sched-mo').classList.remove('open');}
 function closeMo(){document.getElementById('mo').classList.remove('open');_npd=null;}
 function handlePP(input){if(!input.files||!input.files[0])return;var r=new FileReader();r.onload=function(e){_npd=e.target.result;document.getElementById('mo-pi').src=_npd;document.getElementById('hdr-pi').src=_npd;};r.readAsDataURL(input.files[0]);}
