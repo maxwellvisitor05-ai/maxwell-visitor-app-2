@@ -1327,7 +1327,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-s
 <nav class="bnav">
   <button class="ni active"><div class="ni-ico">&#127968;</div><span>Home</span></button>
   <button class="ni" onclick="showPend()"><div class="ni-ico">&#128101;</div><span>Visitors</span></button>
-  <button class="ni" onclick="location.href='/pantry'"><div class="ni-ico">&#9749;</div><span>Pantry</span></button>
   <button class="ni" onclick="openSchedMo()"><div class="ni-ico">&#128197;</div><span>Schedule</span></button>
   <button class="ni" onclick="openMo()"><div class="ni-ico">&#128100;</div><span>Profile</span></button>
 </nav>
@@ -1791,8 +1790,12 @@ def approve_gate_pass():
     # Water order for pantry
     conn.execute("INSERT INTO pantry_orders (visitor_name,person_to_meet,drink,quantity,note,created_at,order_type) VALUES (?,?,?,?,?,?,?)",
                  (gp["visitor_name"],gp["host_name"],"Water",1,"Guest arrived - Gate Pass",now,"gate_guest"))
+    # Add to visitors table so normal flow works (order table, checkout etc)
+    conn.execute("INSERT INTO visitors (name,phone,person_to_meet,department,category,purpose,status,created_at) VALUES (?,?,?,?,?,?,?,?)",
+                 (gp["visitor_name"],gp.get("visitor_phone",""),gp["host_name"],"Gate Pass","Gate Pass Guest",gp["purpose"],"approved",now))
+    vid=conn.execute("SELECT id FROM visitors ORDER BY id DESC LIMIT 1").fetchone()["id"]
     conn.commit(); conn.close()
-    return jsonify({"success":True,"visitor_name":gp["visitor_name"],"host_name":gp["host_name"],"gate_pass_id":gp_id})
+    return jsonify({"success":True,"visitor_name":gp["visitor_name"],"host_name":gp["host_name"],"gate_pass_id":gp_id,"visitor_id":vid})
 
 @app.route("/api/reject-gate-pass", methods=["POST"])
 def reject_gate_pass():
