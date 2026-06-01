@@ -1377,7 +1377,7 @@ async function scheduleMeeting(){
   var gpurl=window.location.origin+'/gate-pass/'+gpid;
   var wa='https://wa.me/91'+m.replace(/\D/g,'')+'?text=';
   var msg='%F0%9F%93%8B Gate Pass Created!%0A%0AVisitor: '+encodeURIComponent(n);
-  msg+='%0AHost: '+encodeURIComponent('"""'+name+'"""');
+  msg+='%0AHost: """+name+"""';
   msg+='%0APurpose: '+encodeURIComponent(purpose);
   msg+='%0ADate: '+encodeURIComponent(dd)+'%0ATime: '+encodeURIComponent(t);
   msg+='%0A%0AOTP: *'+otp+'*%0A%0AGate Pass: '+encodeURIComponent(gpurl);
