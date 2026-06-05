@@ -2,8 +2,14 @@
 """Maxwell Engineering Solutions - Visitor Management System v3.0"""
 
 from flask import Flask, request, jsonify, redirect, session, send_file
-import sqlite3, base64, io, os, hashlib, json
+import base64, io, os, hashlib, json
 from datetime import datetime, timezone, timedelta
+try:
+    import psycopg2, psycopg2.extras
+    HAS_PG = True
+except:
+    import sqlite3
+    HAS_PG = False
 
 try:
     import qrcode
@@ -26,7 +32,8 @@ app.permanent_session_lifetime = __import__('datetime').timedelta(days=30)
 def make_session_permanent():
     session.permanent = True
 
-DB = "maxwell_visitors.db"
+DATABASE_URL = os.environ.get('DATABASE_URL', '')
+DB = "maxwell_visitors.db"  # fallback for sqlite
 PANTRY_EMAIL = os.environ.get("PANTRY_EMAIL","maxwellvisitor05@gmail.com")
 PANTRY_PASSWORD = os.environ.get("PANTRY_PASSWORD","MaxwellPantry2024")
 SECURITY_MOBILE = "9023730509"
@@ -75,7 +82,7 @@ def create_auth_token(user_type, user_email, user_name):
     expires=(now+__import__('datetime').timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
     now_str=now.strftime("%Y-%m-%d %H:%M:%S")
     conn=get_db()
-    conn.execute("INSERT OR REPLACE INTO auth_tokens (token,user_type,user_email,user_name,created_at,expires_at) VALUES (?,?,?,?,?,?)",
+    _exec(conn, ("INSERT INTO auth_tokens (token,user_type,user_email,user_name,created_at,expires_at) VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT (token) DO UPDATE SET user_type=EXCLUDED.user_type,user_email=EXCLUDED.user_email,user_name=EXCLUDED.user_name,created_at=EXCLUDED.created_at,expires_at=EXCLUDED.expires_at" if (HAS_PG and DATABASE_URL) else "INSERT OR REPLACE INTO auth_tokens (token,user_type,user_email,user_name,created_at,expires_at) VALUES (?,?,?,?,?,?)"),
                  (token,user_type,user_email,user_name,now_str,expires))
     conn.commit(); conn.close()
     return token
@@ -83,7 +90,7 @@ def create_auth_token(user_type, user_email, user_name):
 def verify_auth_token(token):
     if not token: return None
     conn=get_db()
-    row=conn.execute("SELECT * FROM auth_tokens WHERE token=?",(token,)).fetchone()
+    row=_fetchone(conn, "SELECT * FROM auth_tokens WHERE token=?",(token,))
     conn.close()
     if not row: return None
     from datetime import datetime as _dt
@@ -96,84 +103,135 @@ def verify_auth_token(token):
 def delete_auth_token(token):
     if not token: return
     conn=get_db()
-    conn.execute("DELETE FROM auth_tokens WHERE token=?",(token,))
+    _exec(conn, "DELETE FROM auth_tokens WHERE token=?",(token,))
     conn.commit(); conn.close()
 
+def get_db():
+    if HAS_PG and DATABASE_URL:
+        conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+        return conn
+    else:
+        import sqlite3 as _sq
+        conn = _sq.connect(DB); conn.row_factory = _sq.Row; return conn
+
+def _q(sql):
+    """Convert ? placeholders to %s for PostgreSQL"""
+    if HAS_PG and DATABASE_URL:
+        return sql.replace('?', '%s')
+    return sql
+
+def _exec(conn, sql, params=None):
+    """Execute SQL on either PG or SQLite connection"""
+    cur = conn.cursor()
+    if params:
+        cur.execute(_q(sql), params)
+    else:
+        cur.execute(_q(sql))
+    return cur
+
+def _fetchone(conn, sql, params=None):
+    cur = _exec(conn, sql, params)
+    row = cur.fetchone()
+    if row and HAS_PG and DATABASE_URL:
+        return dict(row)
+    return row
+
+def _fetchall(conn, sql, params=None):
+    cur = _exec(conn, sql, params)
+    rows = cur.fetchall()
+    if rows and HAS_PG and DATABASE_URL:
+        return [dict(r) for r in rows]
+    return rows
+
+def _upsert(conn, table, pk_col, data_dict):
+    """Upsert: insert or update on conflict"""
+    cols = list(data_dict.keys())
+    vals = list(data_dict.values())
+    if HAS_PG and DATABASE_URL:
+        set_clause = ", ".join(f"{c}=EXCLUDED.{c}" for c in cols if c != pk_col)
+        sql = f"INSERT INTO {table} ({','.join(cols)}) VALUES ({','.join(['%s']*len(cols))}) ON CONFLICT ({pk_col}) DO UPDATE SET {set_clause}"
+    else:
+        sql = f"INSERT OR REPLACE INTO {table} ({','.join(cols)}) VALUES ({','.join(['?']*len(cols))})"
+    _exec(conn, sql, vals)
+
+
 def init_db():
-    conn = sqlite3.connect(DB)
-    conn.execute("""CREATE TABLE IF NOT EXISTS visitors (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, phone TEXT,
+    conn = get_db()
+    serial = "SERIAL" if (HAS_PG and DATABASE_URL) else "INTEGER"
+    pk = "SERIAL PRIMARY KEY" if (HAS_PG and DATABASE_URL) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    _exec(conn, """CREATE TABLE IF NOT EXISTS visitors (
+        id """+pk+""", name TEXT, phone TEXT,
         purpose TEXT, host_name TEXT, category TEXT, department TEXT,
         person_to_meet TEXT, photo TEXT, status TEXT DEFAULT 'pending',
         created_at TEXT, checkout_at TEXT, pass_number TEXT, advance_token TEXT,
         id_front TEXT, id_back TEXT, exit_at TEXT,
         reschedule_date TEXT, reschedule_time TEXT
     )""")
-    conn.execute("""CREATE TABLE IF NOT EXISTS pantry_orders (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, visitor_id INTEGER,
+    _exec(conn, """CREATE TABLE IF NOT EXISTS pantry_orders (
+        id """+pk+""", visitor_id INTEGER,
         visitor_name TEXT, person_to_meet TEXT, drink TEXT, snacks TEXT,
         quantity INTEGER, note TEXT, order_type TEXT DEFAULT 'drink',
         status TEXT DEFAULT 'pending', created_at TEXT, delivered_at TEXT
     )""")
-    conn.execute("""CREATE TABLE IF NOT EXISTS employee_passwords (
+    _exec(conn, """CREATE TABLE IF NOT EXISTS employee_passwords (
         email TEXT PRIMARY KEY, password_hash TEXT, is_default INTEGER DEFAULT 1
     )""")
-    conn.execute("""CREATE TABLE IF NOT EXISTS employee_profiles (
+    _exec(conn, """CREATE TABLE IF NOT EXISTS employee_profiles (
         email TEXT PRIMARY KEY, name TEXT, department TEXT, designation TEXT, photo TEXT
     )""")
-    conn.execute("""CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT)""")
-    conn.execute("""CREATE TABLE IF NOT EXISTS scheduled_meetings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, host_name TEXT, visitor_name TEXT,
+    _exec(conn, """CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT)""")
+    _exec(conn, """CREATE TABLE IF NOT EXISTS scheduled_meetings (
+        id """+pk+""", host_name TEXT, visitor_name TEXT,
         visitor_phone TEXT, meeting_date TEXT, meeting_time TEXT,
         created_at TEXT, status TEXT DEFAULT 'scheduled'
     )""")
-    conn.execute("""CREATE TABLE IF NOT EXISTS gate_passes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, meeting_id INTEGER,
+    _exec(conn, """CREATE TABLE IF NOT EXISTS gate_passes (
+        id """+pk+""", meeting_id INTEGER,
         host_name TEXT, visitor_name TEXT, visitor_phone TEXT,
         purpose TEXT, otp TEXT, valid_from TEXT, valid_till TEXT,
-        created_at TEXT, status TEXT DEFAULT 'active', approved_at TEXT
+        created_at TEXT, status TEXT DEFAULT 'active', approved_at TEXT,
+        gp_photo TEXT, gp_id_front TEXT, gp_id_back TEXT
     )""")
-    for col in ["purpose TEXT","otp TEXT","valid_from TEXT","valid_till TEXT"]:
-        try: conn.execute("ALTER TABLE gate_passes ADD COLUMN {}".format(col))
-        except: pass
-    for col in ["id_front TEXT","id_back TEXT","exit_at TEXT","reschedule_date TEXT","reschedule_time TEXT","checkout_at TEXT","advance_token TEXT"]:
-        try: conn.execute("ALTER TABLE visitors ADD COLUMN {}".format(col))
-        except: pass
-    for col in ["snacks TEXT","order_type TEXT DEFAULT 'drink'"]:
-        try: conn.execute("ALTER TABLE pantry_orders ADD COLUMN {}".format(col))
-        except: pass
-    conn.execute("""CREATE TABLE IF NOT EXISTS gate_passes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, meeting_id INTEGER,
-        host_name TEXT, visitor_name TEXT, visitor_phone TEXT,
-        purpose TEXT, otp TEXT, valid_from TEXT, valid_till TEXT,
-        created_at TEXT, status TEXT DEFAULT 'active', approved_at TEXT
-    )""")
-    conn.execute("""CREATE TABLE IF NOT EXISTS auth_tokens (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+    _exec(conn, """CREATE TABLE IF NOT EXISTS auth_tokens (
+        id """+pk+""",
         token TEXT UNIQUE, user_type TEXT,
         user_email TEXT, user_name TEXT,
         created_at TEXT, expires_at TEXT
     )""")
-    conn.execute("INSERT OR IGNORE INTO app_settings (key,value) VALUES ('admin_pin','1234')")
-    conn.execute("INSERT OR IGNORE INTO app_settings (key,value) VALUES ('security_pass','1234')")
+    # Add missing columns safely
+    extra_visitors = ["id_front TEXT","id_back TEXT","exit_at TEXT","reschedule_date TEXT","reschedule_time TEXT","checkout_at TEXT","advance_token TEXT"]
+    extra_orders = ["snacks TEXT","order_type TEXT DEFAULT 'drink'"]
+    extra_gp = ["purpose TEXT","otp TEXT","valid_from TEXT","valid_till TEXT","gp_photo TEXT","gp_id_front TEXT","gp_id_back TEXT"]
+    for col in extra_visitors:
+        try: _exec(conn, "ALTER TABLE visitors ADD COLUMN {}".format(col))
+        except: pass
+    for col in extra_orders:
+        try: _exec(conn, "ALTER TABLE pantry_orders ADD COLUMN {}".format(col))
+        except: pass
+    for col in extra_gp:
+        try: _exec(conn, "ALTER TABLE gate_passes ADD COLUMN {}".format(col))
+        except: pass
+    if HAS_PG and DATABASE_URL:
+        _exec(conn, "INSERT INTO app_settings (key,value) VALUES (%s,%s) ON CONFLICT DO NOTHING", ('admin_pin','1234'))
+        _exec(conn, "INSERT INTO app_settings (key,value) VALUES (%s,%s) ON CONFLICT DO NOTHING", ('security_pass','1234'))
+    else:
+        _exec(conn, "INSERT OR IGNORE INTO app_settings (key,value) VALUES ('admin_pin','1234')")
+        _exec(conn, "INSERT OR IGNORE INTO app_settings (key,value) VALUES ('security_pass','1234')")
     conn.commit(); conn.close()
-
-def get_db():
-    conn = sqlite3.connect(DB); conn.row_factory = sqlite3.Row; return conn
 
 def get_setting(key, default=""):
     conn = get_db()
-    row = conn.execute("SELECT value FROM app_settings WHERE key=?", (key,)).fetchone()
+    row = _fetchone(conn, "SELECT value FROM app_settings WHERE key=?", (key,))
     conn.close(); return row["value"] if row else default
 
 def set_setting(key, value):
     conn = get_db()
-    conn.execute("INSERT OR REPLACE INTO app_settings (key,value) VALUES (?,?)", (key,value))
+    _exec(conn, ("INSERT INTO app_settings (key,value) VALUES (%s,%s) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value" if (HAS_PG and DATABASE_URL) else "INSERT OR REPLACE INTO app_settings (key,value) VALUES (?,?)"), (key,value))
     conn.commit(); conn.close()
 
 def check_emp_password(email, password, emp_name):
     conn = get_db()
-    row = conn.execute("SELECT password_hash,is_default FROM employee_passwords WHERE email=?", (email,)).fetchone()
+    row = _fetchone(conn, "SELECT password_hash,is_default FROM employee_passwords WHERE email=?", (email,))
     conn.close()
     if row: return hash_pw(password)==row["password_hash"], bool(row["is_default"])
     return password==emp_name, True
@@ -188,16 +246,16 @@ def make_qr(data):
 
 def get_employee_profile(email):
     conn = get_db()
-    row = conn.execute("SELECT * FROM employee_profiles WHERE email=?", (email,)).fetchone()
+    row = _fetchone(conn, "SELECT * FROM employee_profiles WHERE email=?", (email,))
     conn.close(); return dict(row) if row else {}
 
 def save_employee_profile(email, name, department, designation, photo=None):
     conn = get_db()
     if photo:
-        conn.execute("INSERT OR REPLACE INTO employee_profiles (email,name,department,designation,photo) VALUES (?,?,?,?,?)",
+        _exec(conn, ("INSERT INTO employee_profiles (email,name,department,designation,photo) VALUES (%s,%s,%s,%s,%s) ON CONFLICT (email) DO UPDATE SET name=EXCLUDED.name,department=EXCLUDED.department,designation=EXCLUDED.designation,photo=EXCLUDED.photo" if (HAS_PG and DATABASE_URL) else "INSERT OR REPLACE INTO employee_profiles (email,name,department,designation,photo) VALUES (?,?,?,?,?)"),
                      (email,name,department,designation,photo))
     else:
-        conn.execute("INSERT OR REPLACE INTO employee_profiles (email,name,department,designation,photo) VALUES (?,?,?,?,COALESCE((SELECT photo FROM employee_profiles WHERE email=?),NULL))",
+        _exec(conn, ("INSERT INTO employee_profiles (email,name,department,designation,photo) VALUES (%s,%s,%s,%s,COALESCE((SELECT photo FROM employee_profiles WHERE email=%s),NULL)) ON CONFLICT (email) DO UPDATE SET name=EXCLUDED.name,department=EXCLUDED.department,designation=EXCLUDED.designation,photo=EXCLUDED.photo" if (HAS_PG and DATABASE_URL) else "INSERT OR REPLACE INTO employee_profiles (email,name,department,designation,photo) VALUES (?,?,?,?,COALESCE((SELECT photo FROM employee_profiles WHERE email=?),NULL))"),
                      (email,name,department,designation,email))
     conn.commit(); conn.close()
 
@@ -290,7 +348,7 @@ input:focus,textarea:focus,select:focus{border-color:#1565C0;background:white}
 <div class="card"><div class="section-title">&#128203; Visitor Entry</div>
 <div class="row2">
   <div><label class="field-label">Full Name <span class="req">*</span></label><input type="text" id="v-name" placeholder="Full name"></div>
-  <div><label class="field-label">Phone <span class="req">*</span></label><input type="tel" id="v-phone" placeholder="Mobile"></div>
+  <div><label class="field-label">Phone <span class="req">*</span></label><input type="tel" id="v-phone" placeholder="Mobile" onblur="lookupPhone(this.value)"></div>
 </div>
 <div class="row1"><label class="field-label">Company / Organization <span class="req">*</span></label><input type="text" id="v-company" placeholder="Company name"></div>
 <div class="row1"><label class="field-label">Name of Host</label><input type="text" id="v-host" placeholder="Who are you visiting?"></div>
@@ -420,6 +478,15 @@ function handleIdGallery(side,input){if(!input.files||!input.files[0])return;
     document.getElementById('id-'+side+'-icon').style.display='none';document.getElementById('id-'+side+'-ret').style.display='';};
   reader.readAsDataURL(input.files[0]);}
 function showAlert(msg){document.getElementById('alert-box').innerHTML='<div class="alert alert-error">'+msg+'</div>';setTimeout(function(){document.getElementById('alert-box').innerHTML='';},5000);}
+async function lookupPhone(phone){
+  if(!phone||phone.length<6)return;
+  try{var r=await fetch('/api/lookup-phone?phone='+encodeURIComponent(phone));var d=await r.json();
+    if(d.found){
+      var nf=document.getElementById('v-name');
+      var hf=document.getElementById('v-host');
+      if(nf&&!nf.value&&d.name){nf.value=d.name;nf.style.background='#E8F5E9';}
+      if(hf&&!hf.value&&d.host_name){hf.value=d.host_name;hf.style.background='#E8F5E9';}
+    }}catch(e){}}
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js');}
 async function submitForm(){
   var name=document.getElementById('v-name').value.trim();var phone=document.getElementById('v-phone').value.trim();
@@ -445,10 +512,12 @@ async function submitForm(){
 
 @app.route("/api/visitor", methods=["POST"])
 def create_visitor():
-    data = request.get_json(); now = get_ist(); conn = get_db(); c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM visitors"); count = c.fetchone()[0] + 1
+    data = request.get_json(); now = get_ist(); conn = get_db()
+    cur = _exec(conn, "SELECT COUNT(*) FROM visitors")
+    row = cur.fetchone()
+    count = (row[0] if not isinstance(row, dict) else list(row.values())[0]) + 1
     pass_num = "MW-" + datetime.now().strftime("%Y%m%d") + "-" + str(count).zfill(4)
-    c.execute("""INSERT INTO visitors (name,phone,purpose,host_name,category,department,person_to_meet,photo,created_at,pass_number,id_front,id_back) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+    _exec(conn, """INSERT INTO visitors (name,phone,purpose,host_name,category,department,person_to_meet,photo,created_at,pass_number,id_front,id_back) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
         (data.get("name"),data.get("phone"),data.get("purpose"),data.get("host_name"),
          data.get("category"),data.get("department"),data.get("person_to_meet"),data.get("photo"),
          now,pass_num,data.get("id_front"),data.get("id_back")))
@@ -456,38 +525,62 @@ def create_visitor():
 
 @app.route("/api/pending-count")
 def pending_count():
-    conn=get_db();row=conn.execute("SELECT COUNT(*) as cnt FROM visitors WHERE status='pending'").fetchone();conn.close()
+    conn=get_db();row=_fetchone(conn, "SELECT COUNT(*) as cnt FROM visitors WHERE status='pending'");conn.close()
     return jsonify({"count":row["cnt"]})
+
+@app.route("/api/lookup-phone")
+def lookup_phone():
+    """Auto-fill visitor form from previous visit by phone number"""
+    phone=request.args.get("phone","").strip()
+    if not phone or len(phone)<6: return jsonify({"found":False})
+    conn=get_db()
+    row=_fetchone(conn, "SELECT name,phone,host_name,purpose FROM visitors WHERE phone=? ORDER BY id DESC LIMIT 1",(phone,))
+    conn.close()
+    if row:
+        r=dict(row)
+        return jsonify({"found":True,"name":r.get("name",""),"host_name":r.get("host_name","")})
+    return jsonify({"found":False})
+
+@app.route("/api/visitor-detail/<int:vid>")
+def visitor_detail(vid):
+    """Get full visitor details for popup"""
+    conn=get_db()
+    row=_fetchone(conn, "SELECT * FROM visitors WHERE id=?",(vid,))
+    conn.close()
+    if not row: return jsonify({"error":"Not found"}),404
+    r=dict(row)
+    # Don't send large photo/ID base64 in detail (they're already shown)
+    return jsonify(r)
 
 @app.route("/api/latest-pending")
 def latest_pending():
     host=request.args.get("host","");conn=get_db()
-    if host: row=conn.execute("SELECT id,name,person_to_meet,created_at FROM visitors WHERE status='pending' AND person_to_meet=? ORDER BY id DESC LIMIT 1",(host,)).fetchone()
-    else: row=conn.execute("SELECT id,name,person_to_meet,created_at FROM visitors WHERE status='pending' ORDER BY id DESC LIMIT 1").fetchone()
+    if host: row=_fetchone(conn, "SELECT id,name,person_to_meet,created_at FROM visitors WHERE status='pending' AND person_to_meet=? ORDER BY id DESC LIMIT 1",(host,))
+    else: row=_fetchone(conn, "SELECT id,name,person_to_meet,created_at FROM visitors WHERE status='pending' ORDER BY id DESC LIMIT 1")
     conn.close(); return jsonify({"visitor":dict(row) if row else None})
 
 @app.route("/api/latest-visitor")
 def latest_visitor():
-    conn=get_db();rows=[dict(r) for r in conn.execute("SELECT id,name,phone,department,person_to_meet,status,created_at,pass_number FROM visitors ORDER BY id DESC LIMIT 20").fetchall()];conn.close()
+    conn=get_db();rows=[dict(r) for r in _fetchall(conn, "SELECT id,name,phone,department,person_to_meet,status,created_at,pass_number FROM visitors ORDER BY id DESC LIMIT 20")];conn.close()
     return jsonify({"visitors":rows})
 
 @app.route("/api/checkout-notify")
 def checkout_notify():
-    conn=get_db();row=conn.execute("SELECT id,name,person_to_meet,checkout_at FROM visitors WHERE checkout_at IS NOT NULL ORDER BY id DESC LIMIT 1").fetchone();conn.close()
+    conn=get_db();row=_fetchone(conn, "SELECT id,name,person_to_meet,checkout_at FROM visitors WHERE checkout_at IS NOT NULL ORDER BY id DESC LIMIT 1");conn.close()
     return jsonify({"checkout":dict(row) if row else None})
 
 @app.route("/api/latest-scheduled")
 def latest_scheduled():
-    conn=get_db();row=conn.execute("SELECT id,host_name,visitor_name,meeting_date,meeting_time,created_at FROM scheduled_meetings ORDER BY id DESC LIMIT 1").fetchone();conn.close()
+    conn=get_db();row=_fetchone(conn, "SELECT id,host_name,visitor_name,meeting_date,meeting_time,created_at FROM scheduled_meetings ORDER BY id DESC LIMIT 1");conn.close()
     return jsonify({"meeting":dict(row) if row else None})
 
 @app.route("/action/<int:vid>/<action>")
 def do_action(vid, action):
     if action not in ("approve","reject"): return "Invalid",400
     conn=get_db();status_val="approved" if action=="approve" else "rejected"
-    conn.execute("UPDATE visitors SET status=? WHERE id=?",(status_val,vid));conn.commit()
+    _exec(conn, "UPDATE visitors SET status=? WHERE id=?",(status_val,vid));conn.commit()
     if action=="approve":
-        v=dict(conn.execute("SELECT * FROM visitors WHERE id=?",(vid,)).fetchone());conn.close()
+        v=dict(_fetchone(conn, "SELECT * FROM visitors WHERE id=?",(vid,)));conn.close()
         now=get_ist();conn2=get_db()
         conn2.execute("INSERT INTO pantry_orders (visitor_id,visitor_name,person_to_meet,drink,quantity,note,created_at,order_type) VALUES (?,?,?,?,?,?,?,?)",
                       (vid,v["name"],v["person_to_meet"],"Water",1,"Guest arrived",now,"arrival"))
@@ -499,19 +592,19 @@ def do_action(vid, action):
 
 @app.route("/api/checkout/<int:vid>", methods=["POST"])
 def checkout_visitor(vid):
-    now=get_ist();conn=get_db();conn.execute("UPDATE visitors SET checkout_at=? WHERE id=?",(now,vid));conn.commit();conn.close()
+    now=get_ist();conn=get_db();_exec(conn, "UPDATE visitors SET checkout_at=? WHERE id=?",(now,vid));conn.commit();conn.close()
     return jsonify({"success":True,"checkout_at":now})
 
 @app.route("/api/security-exit/<int:vid>", methods=["POST"])
 def security_exit(vid):
-    now=get_ist();conn=get_db();conn.execute("UPDATE visitors SET exit_at=? WHERE id=?",(now,vid));conn.commit();conn.close()
+    now=get_ist();conn=get_db();_exec(conn, "UPDATE visitors SET exit_at=? WHERE id=?",(now,vid));conn.commit();conn.close()
     return jsonify({"success":True,"exit_at":now})
 
 @app.route("/api/beverage", methods=["POST"])
 def order_beverage():
     data=request.get_json();now=get_ist();conn=get_db()
     ptm=data.get("person_to_meet") or session.get("emp_name","")
-    conn.execute("INSERT INTO pantry_orders (visitor_id,visitor_name,person_to_meet,drink,snacks,quantity,note,created_at,order_type) VALUES (?,?,?,?,?,?,?,?,?)",
+    _exec(conn, "INSERT INTO pantry_orders (visitor_id,visitor_name,person_to_meet,drink,snacks,quantity,note,created_at,order_type) VALUES (?,?,?,?,?,?,?,?,?)",
                  (data.get("visitor_id"),data.get("visitor_name"),ptm,data.get("drink",""),data.get("snacks",""),data.get("quantity",1),data.get("note",""),now,"order"))
     conn.commit();conn.close();return jsonify({"success":True})
 
@@ -521,44 +614,44 @@ def schedule_meeting():
     data=request.get_json();now=get_ist();conn=get_db()
     purpose=data.get("purpose","Meeting")
     host=data.get("host_name") or session.get("emp_name","")
-    conn.execute("INSERT INTO scheduled_meetings (host_name,visitor_name,visitor_phone,meeting_date,meeting_time,created_at) VALUES (?,?,?,?,?,?)",
+    _exec(conn, "INSERT INTO scheduled_meetings (host_name,visitor_name,visitor_phone,meeting_date,meeting_time,created_at) VALUES (?,?,?,?,?,?)",
                  (host,data.get("visitor_name"),data.get("visitor_phone"),data.get("meeting_date"),data.get("meeting_time"),now))
     conn.commit()
-    mid=conn.execute("SELECT id FROM scheduled_meetings ORDER BY id DESC LIMIT 1").fetchone()["id"]
+    mid=_fetchone(conn, "SELECT id FROM scheduled_meetings ORDER BY id DESC LIMIT 1")["id"]
     otp=str(_rnd.randint(100000,999999))
     from datetime import datetime as _dt,timedelta as _td
     try:
         dt=_dt.strptime((data.get("meeting_date",""))+" "+(data.get("meeting_time","")[:5]),"%Y-%m-%d %H:%M")
         vfrom=dt.strftime("%d %b %Y, %I:%M %p"); vtill=(dt+_td(hours=3)).strftime("%d %b %Y, %I:%M %p")
     except: vfrom=now; vtill=now
-    conn.execute("INSERT INTO gate_passes (meeting_id,host_name,visitor_name,visitor_phone,purpose,otp,valid_from,valid_till,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+    _exec(conn, "INSERT INTO gate_passes (meeting_id,host_name,visitor_name,visitor_phone,purpose,otp,valid_from,valid_till,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
                  (mid,host,data.get("visitor_name"),data.get("visitor_phone"),purpose,otp,vfrom,vtill,now))
     conn.commit()
-    gp=conn.execute("SELECT id FROM gate_passes ORDER BY id DESC LIMIT 1").fetchone()
+    gp=_fetchone(conn, "SELECT id FROM gate_passes ORDER BY id DESC LIMIT 1")
     conn.close()
     return jsonify({"success":True,"otp":otp,"gate_pass_id":gp["id"],"visitor_name":data.get("visitor_name","")})
 
 @app.route("/api/reschedule/<int:vid>", methods=["POST"])
 def reschedule_visitor(vid):
     data=request.get_json();conn=get_db()
-    conn.execute("UPDATE visitors SET status='rescheduled',reschedule_date=?,reschedule_time=? WHERE id=?",(data.get("date"),data.get("time"),vid))
+    _exec(conn, "UPDATE visitors SET status='rescheduled',reschedule_date=?,reschedule_time=? WHERE id=?",(data.get("date"),data.get("time"),vid))
     conn.commit();conn.close();return jsonify({"success":True})
 
 @app.route("/api/pantry-pending")
 def pantry_pending():
-    conn=get_db();row=conn.execute("SELECT COUNT(*) as cnt FROM pantry_orders WHERE status='pending'").fetchone();conn.close()
+    conn=get_db();row=_fetchone(conn, "SELECT COUNT(*) as cnt FROM pantry_orders WHERE status='pending'");conn.close()
     return jsonify({"count":row["cnt"]})
 
 @app.route("/api/pantry-deliver/<int:oid>", methods=["POST"])
 def pantry_deliver(oid):
-    now=get_ist();conn=get_db();conn.execute("UPDATE pantry_orders SET status='delivered',delivered_at=? WHERE id=?",(now,oid));conn.commit();conn.close()
+    now=get_ist();conn=get_db();_exec(conn, "UPDATE pantry_orders SET status='delivered',delivered_at=? WHERE id=?",(now,oid));conn.commit();conn.close()
     return jsonify({"success":True})
 
 @app.route("/api/admin-reset-password", methods=["POST"])
 def admin_reset_password():
     if not session.get("admin_ok"): return jsonify({"error":"Not authorized"}),401
     data=request.get_json();conn=get_db()
-    conn.execute("INSERT OR REPLACE INTO employee_passwords (email,password_hash,is_default) VALUES (?,?,0)",(data.get("email"),hash_pw(data.get("new_password",""))))
+    _exec(conn, ("INSERT INTO employee_passwords (email,password_hash,is_default) VALUES (%s,%s,0) ON CONFLICT (email) DO UPDATE SET password_hash=EXCLUDED.password_hash,is_default=0" if (HAS_PG and DATABASE_URL) else "INSERT OR REPLACE INTO employee_passwords (email,password_hash,is_default) VALUES (?,?,0)"),(data.get("email"),hash_pw(data.get("new_password",""))))
     conn.commit();conn.close();return jsonify({"success":True})
 
 @app.route("/api/profile", methods=["GET"])
@@ -579,7 +672,7 @@ def save_profile():
 
 @app.route("/pass/<int:vid>")
 def show_pass(vid):
-    conn=get_db();row=conn.execute("SELECT * FROM visitors WHERE id=?",(vid,)).fetchone();conn.close()
+    conn=get_db();row=_fetchone(conn, "SELECT * FROM visitors WHERE id=?",(vid,));conn.close()
     if not row: return "Not found",404
     v=dict(row)
     if v["status"]!="approved":
@@ -641,17 +734,17 @@ def admin():
     session.modified=True
     tab=request.args.get("tab","pending")
     conn=get_db()
-    if tab=="all": visitors=[dict(r) for r in conn.execute("SELECT * FROM visitors ORDER BY id DESC").fetchall()]
-    else: visitors=[dict(r) for r in conn.execute("SELECT * FROM visitors WHERE status=? ORDER BY id DESC",(tab,)).fetchall()]
+    if tab=="all": visitors=[dict(r) for r in _fetchall(conn, "SELECT * FROM visitors ORDER BY id DESC")]
+    else: visitors=[dict(r) for r in _fetchall(conn, "SELECT * FROM visitors WHERE status=? ORDER BY id DESC",(tab,))]
     counts={}
-    for r in conn.execute("SELECT status,COUNT(*) as cnt FROM visitors GROUP BY status").fetchall():
+    for r in _fetchall(conn, "SELECT status,COUNT(*) as cnt FROM visitors GROUP BY status"):
         counts[r["status"]]=r["cnt"]
-    active_visitors=[dict(r) for r in conn.execute("SELECT * FROM visitors WHERE status='approved' AND checkout_at IS NULL ORDER BY id DESC").fetchall()]
-    recent_orders=[dict(r) for r in conn.execute("SELECT * FROM pantry_orders ORDER BY id DESC LIMIT 10").fetchall()]
-    scheduled=[dict(r) for r in conn.execute("SELECT * FROM scheduled_meetings ORDER BY id DESC LIMIT 15").fetchall()]
-    lp=conn.execute("SELECT id FROM visitors WHERE status='pending' ORDER BY id DESC LIMIT 1").fetchone()
-    lco=conn.execute("SELECT id,name,checkout_at FROM visitors WHERE checkout_at IS NOT NULL ORDER BY id DESC LIMIT 1").fetchone()
-    ls=conn.execute("SELECT id FROM scheduled_meetings ORDER BY id DESC LIMIT 1").fetchone()
+    active_visitors=[dict(r) for r in _fetchall(conn, "SELECT * FROM visitors WHERE status='approved' AND checkout_at IS NULL ORDER BY id DESC")]
+    recent_orders=[dict(r) for r in _fetchall(conn, "SELECT * FROM pantry_orders ORDER BY id DESC LIMIT 10")]
+    scheduled=[dict(r) for r in _fetchall(conn, "SELECT * FROM scheduled_meetings ORDER BY id DESC LIMIT 15")]
+    lp=_fetchone(conn, "SELECT id FROM visitors WHERE status='pending' ORDER BY id DESC LIMIT 1")
+    lco=_fetchone(conn, "SELECT id,name,checkout_at FROM visitors WHERE checkout_at IS NOT NULL ORDER BY id DESC LIMIT 1")
+    ls=_fetchone(conn, "SELECT id FROM scheduled_meetings ORDER BY id DESC LIMIT 1")
     conn.close()
     pc=counts.get("pending",0);ac=counts.get("approved",0);rc=counts.get("rejected",0)
     lp_id=lp["id"] if lp else 0; lco_id=lco["id"] if lco else 0; ls_id=ls["id"] if ls else 0
@@ -784,7 +877,7 @@ def admin():
             +"var _ol="+str(lp_id)+",_oc="+str(lco_id)+",_sl="+str(ls_id)+",_aq={},_fw=true;"
             "var _vt="+json.dumps(visitor_times)+";"
             "function doExport(){var fr=document.getElementById('f-from').value,to=document.getElementById('f-to').value,dept=document.getElementById('f-dept').value,st=document.getElementById('f-status').value;window.open('/admin/export?from='+encodeURIComponent(fr)+'&to='+encodeURIComponent(to)+'&dept='+encodeURIComponent(dept)+'&status='+encodeURIComponent(st));}"
-            "async function act(id,action){if(!confirm(action+' this visitor?'))return;await fetch('/action/'+id+'/'+action,{headers:{'Accept':'application/json'}});if(action==='approve')window.open('/pass/'+id);location.reload();}"
+            "async function act(id,action){if(!confirm(action+' this visitor?'))return;await fetch('/action/'+id+'/'+action,{headers:{'Accept':'application/json'}});location.reload();}"
             "async function chk(id){if(!confirm('Checkout?'))return;await fetch('/api/checkout/'+id,{method:'POST'});location.reload();}"
             "function changeAQty(v,d){if(!_aq[v])_aq[v]=1;_aq[v]=Math.max(1,_aq[v]+d);document.getElementById('aqty-'+v).textContent=_aq[v];}"
             "async function adminOrder(vid,vname,person){var drink=document.getElementById('adrk-'+vid).value;var qty=_aq[vid]||1;var snacks=document.getElementById('asnk-'+vid).value;"
@@ -868,8 +961,8 @@ def export_excel():
     if dept: query+=" AND department=?"; params.append(dept)
     if status: query+=" AND status=?"; params.append(status)
     query+=" ORDER BY id DESC"
-    visitors=[dict(r) for r in conn.execute(query,params).fetchall()]
-    gate_passes=[dict(r) for r in conn.execute("SELECT * FROM gate_passes ORDER BY id DESC").fetchall()]
+    visitors=[dict(r) for r in _fetchall(conn, query,params)]
+    gate_passes=[dict(r) for r in _fetchall(conn, "SELECT * FROM gate_passes ORDER BY id DESC")]
     conn.close()
     wb=openpyxl.Workbook()
 
@@ -960,7 +1053,7 @@ def pantry_login():
 def pantry():
     if not session.get("pantry_ok") and not session.get("admin_ok"): return redirect("/pantry-login")
     conn=get_db()
-    orders=[dict(r) for r in conn.execute("SELECT * FROM pantry_orders ORDER BY id DESC LIMIT 60").fetchall()]
+    orders=[dict(r) for r in _fetchall(conn, "SELECT * FROM pantry_orders ORDER BY id DESC LIMIT 60")]
     conn.close()
     order_times={str(o["id"]):o["created_at"] for o in orders if o["status"]=="pending"}
     rows=""
@@ -1099,15 +1192,15 @@ def employee_dashboard():
         for d,members in DEPARTMENTS.items():
             if name in members: emp_dept=d; break
     conn=get_db()
-    visitors=[dict(r) for r in conn.execute("SELECT * FROM visitors WHERE person_to_meet=? AND status='approved' AND checkout_at IS NULL ORDER BY id DESC",(name,)).fetchall()]
-    all_visitors=[dict(r) for r in conn.execute("SELECT * FROM visitors WHERE person_to_meet=? ORDER BY id DESC LIMIT 10",(name,)).fetchall()]
-    pending_visitors=[dict(r) for r in conn.execute("SELECT * FROM visitors WHERE person_to_meet=? AND status='pending' ORDER BY id DESC",(name,)).fetchall()]
-    lhp=conn.execute("SELECT id FROM visitors WHERE person_to_meet=? AND status='pending' ORDER BY id DESC LIMIT 1",(name,)).fetchone()
+    visitors=[dict(r) for r in _fetchall(conn, "SELECT * FROM visitors WHERE person_to_meet=? AND status='approved' AND checkout_at IS NULL ORDER BY id DESC",(name,))]
+    all_visitors=[dict(r) for r in _fetchall(conn, "SELECT * FROM visitors WHERE person_to_meet=? ORDER BY id DESC LIMIT 10",(name,))]
+    pending_visitors=[dict(r) for r in _fetchall(conn, "SELECT * FROM visitors WHERE person_to_meet=? AND status='pending' ORDER BY id DESC",(name,))]
+    lhp=_fetchone(conn, "SELECT id FROM visitors WHERE person_to_meet=? AND status='pending' ORDER BY id DESC LIMIT 1",(name,))
     today=get_ist()[:10]
-    today_count=conn.execute("SELECT COUNT(*) as cnt FROM visitors WHERE person_to_meet=? AND created_at LIKE ?",(name,today+"%")).fetchone()["cnt"]
-    checked_out=conn.execute("SELECT COUNT(*) as cnt FROM visitors WHERE person_to_meet=? AND checkout_at IS NOT NULL AND created_at LIKE ?",(name,today+"%")).fetchone()["cnt"]
-    in_house=conn.execute("SELECT COUNT(*) as cnt FROM visitors WHERE person_to_meet=? AND status='approved' AND checkout_at IS NULL",(name,)).fetchone()["cnt"]
-    orders_today=conn.execute("SELECT COUNT(*) as cnt FROM pantry_orders WHERE person_to_meet=? AND created_at LIKE ?",(name,today+"%")).fetchone()["cnt"]
+    today_count=_fetchone(conn, "SELECT COUNT(*) as cnt FROM visitors WHERE person_to_meet=? AND created_at LIKE ?",(name,today+"%"))["cnt"]
+    checked_out=_fetchone(conn, "SELECT COUNT(*) as cnt FROM visitors WHERE person_to_meet=? AND checkout_at IS NOT NULL AND created_at LIKE ?",(name,today+"%"))["cnt"]
+    in_house=_fetchone(conn, "SELECT COUNT(*) as cnt FROM visitors WHERE person_to_meet=? AND status='approved' AND checkout_at IS NULL",(name,))["cnt"]
+    orders_today=_fetchone(conn, "SELECT COUNT(*) as cnt FROM pantry_orders WHERE person_to_meet=? AND created_at LIKE ?",(name,today+"%"))["cnt"]
     conn.close()
     lhp_id=lhp["id"] if lhp else 0
     force_change=session.get("force_pw_change",False)
@@ -1118,11 +1211,11 @@ def employee_dashboard():
     active_cards=""
     for v in visitors:
         vid=str(v["id"])
-        active_cards+=('<div class="avc" id="avc-'+vid+'"><div class="av-top">'
+        active_cards+=('<div class="avc" id="avc-'+vid+'" onclick="showVisitorDetail('+vid+',event)" style="cursor:pointer"><div class="av-top">'
             '<div class="av-left"><div class="av-name">'+v["name"]+'</div>'
             '<div class="av-time">'+v["created_at"]+'</div>'
             '<div class="av-purpose">'+v["purpose"][:40]+'</div></div>'
-            '<button class="co-btn" onclick="checkout('+vid+')">&#128682; Checkout</button></div>'
+            '<button class="co-btn" onclick="event.stopPropagation();checkout('+vid+')">&#128682; Checkout</button></div>'
             '<div class="ord-sec" id="ord-'+vid+'" style="display:none">'
             '<div class="ob"><div class="ob-title">&#9749; Order Drink</div>'
             '<div class="drink-row">'
@@ -1323,6 +1416,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-s
   <button onclick="location.href='/employee-logout'" style="width:100%;padding:12px;background:#FFEBEE;color:#C62828;border:1.5px solid #EF9A9A;border-radius:12px;font-size:14px;font-weight:700;cursor:pointer;margin-top:8px">&#128682; Logout</button>
 </div></div>
 <a href="/" class="fab">+</a>
+<div id="vd-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1000;align-items:center;justify-content:center;padding:20px" onclick="if(event.target===this)closeVisitorDetail()">
+  <div style="background:white;border-radius:20px;padding:24px;max-width:380px;width:100%;max-height:85vh;overflow-y:auto;position:relative">
+    <button onclick="closeVisitorDetail()" style="position:absolute;top:14px;right:14px;background:#F5F5F5;border:none;width:32px;height:32px;border-radius:50%;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center">&times;</button>
+    <div style="font-size:14px;font-weight:700;color:#1565C0;margin-bottom:16px">&#128100; Visitor Details</div>
+    <div id="vd-body"></div>
+  </div>
+</div>
 <nav class="bnav">
   <button class="ni active"><div class="ni-ico">&#127968;</div><span>Home</span></button>
   <button class="ni" onclick="showPend()"><div class="ni-ico">&#128101;</div><span>Visitors</span></button>
@@ -1349,8 +1449,32 @@ async function confirmOrder(vid,vname,person){
   showNB('&#10003; Order sent!',5000);_beep(2);document.getElementById('ord-'+vid).style.display='none';document.getElementById('drk-'+vid).value='';document.getElementById('snk-'+vid).value='';document.getElementById('nte-'+vid).value='';_qty[vid]=1;document.getElementById('qty-'+vid).textContent='1';}
 async function act(id,action){if(!confirm(action+' this visitor?'))return;
   await fetch('/action/'+id+'/'+action,{headers:{'Accept':'application/json'}});
-  if(action==='approve')window.open('/pass/'+id);location.reload();}
+  location.reload();}
 async function checkout(id){if(!confirm('Checkout?'))return;await fetch('/api/checkout/'+id,{method:'POST'});var card=document.getElementById('avc-'+id);if(card)card.remove();var ord=document.getElementById('ord-'+id);if(ord)ord.remove();}
+async function showVisitorDetail(id,e){
+  if(e&&e.target&&(e.target.tagName==='BUTTON'||e.target.tagName==='SELECT'||e.target.tagName==='INPUT'))return;
+  try{var r=await fetch('/api/visitor-detail/'+id);var d=await r.json();
+    var photo=d.photo?'<img src="'+d.photo+'" style="width:80px;height:80px;border-radius:50%;object-fit:cover;border:3px solid #1565C0;margin-bottom:10px">':'';
+    var idFront=d.id_front?'<div style="margin-top:8px"><div style="font-size:11px;color:#888;text-transform:uppercase">ID Front</div><img src="'+d.id_front+'" style="max-width:140px;border-radius:6px;border:1px solid #ddd;margin-top:4px"></div>':'';
+    var idBack=d.id_back?'<div style="margin-top:6px"><div style="font-size:11px;color:#888;text-transform:uppercase">ID Back</div><img src="'+d.id_back+'" style="max-width:140px;border-radius:6px;border:1px solid #ddd;margin-top:4px"></div>':'';
+    var statusColor={'approved':'#2E7D32','rejected':'#C62828','pending':'#F57F17','rescheduled':'#1565C0'}[d.status]||'#888';
+    var html='<div style="text-align:center">'+photo+'</div>'
+      +'<div style="font-size:18px;font-weight:800;color:#1A1A2E;margin-bottom:4px">'+d.name+'</div>'
+      +'<div style="font-size:13px;color:#555;margin-bottom:12px">'+d.phone+'</div>'
+      +'<span style="background:'+statusColor+';color:white;padding:3px 12px;border-radius:20px;font-size:12px;font-weight:700">'+d.status.toUpperCase()+'</span>'
+      +'<div style="margin-top:14px;display:grid;gap:8px;font-size:13px">'
+      +'<div style="background:#F8F9FA;border-radius:8px;padding:10px"><b style="color:#888;font-size:11px;text-transform:uppercase">Purpose</b><div>'+d.purpose+'</div></div>'
+      +'<div style="background:#F8F9FA;border-radius:8px;padding:10px"><b style="color:#888;font-size:11px;text-transform:uppercase">Category</b><div>'+d.category+'</div></div>'
+      +'<div style="background:#F8F9FA;border-radius:8px;padding:10px"><b style="color:#888;font-size:11px;text-transform:uppercase">Department</b><div>'+d.department+'</div></div>'
+      +'<div style="background:#F8F9FA;border-radius:8px;padding:10px"><b style="color:#888;font-size:11px;text-transform:uppercase">Host</b><div>'+(d.host_name||'-')+'</div></div>'
+      +'<div style="background:#F8F9FA;border-radius:8px;padding:10px"><b style="color:#888;font-size:11px;text-transform:uppercase">Entry Time</b><div>'+d.created_at+'</div></div>'
+      +(d.checkout_at?'<div style="background:#F8F9FA;border-radius:8px;padding:10px"><b style="color:#888;font-size:11px;text-transform:uppercase">Checkout</b><div>'+d.checkout_at+'</div></div>':'')
+      +'<div style="background:#F8F9FA;border-radius:8px;padding:10px"><b style="color:#888;font-size:11px;text-transform:uppercase">Pass No.</b><div style="font-family:monospace;font-weight:700">'+(d.pass_number||'-')+'</div></div>'
+      +'</div>'+idFront+idBack;
+    var modal=document.getElementById('vd-modal');
+    document.getElementById('vd-body').innerHTML=html;
+    modal.style.display='flex';}catch(e){}}
+function closeVisitorDetail(){document.getElementById('vd-modal').style.display='none';}
 function toggleRs(vid){var p=document.getElementById('rs-'+vid);p.style.display=p.style.display==='none'?'block':'none';}
 async function doReschedule(vid,vname,phone){
   var date=document.getElementById('rsd-'+vid).value;var time=document.getElementById('rst-'+vid).value;
@@ -1436,7 +1560,7 @@ def change_password():
         elif len(new_pw)<4: err="New password must be at least 4 characters!"
         elif new_pw!=confirm_pw: err="Passwords do not match!"
         else:
-            conn=get_db();conn.execute("INSERT OR REPLACE INTO employee_passwords (email,password_hash,is_default) VALUES (?,?,0)",(email,hash_pw(new_pw)));conn.commit();conn.close()
+            conn=get_db();_exec(conn, ("INSERT INTO employee_passwords (email,password_hash,is_default) VALUES (%s,%s,0) ON CONFLICT (email) DO UPDATE SET password_hash=EXCLUDED.password_hash,is_default=0" if (HAS_PG and DATABASE_URL) else "INSERT OR REPLACE INTO employee_passwords (email,password_hash,is_default) VALUES (?,?,0)"),(email,hash_pw(new_pw)));conn.commit();conn.close()
             session.pop("force_pw_change",None); msg="Password changed successfully!"
     return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Change Password</title>"
             "<style>body{font-family:Arial;background:#f0f4f8}"+HEADER_CSS
@@ -1486,11 +1610,11 @@ def security_login():
 def security_dashboard():
     if not session.get("security_ok"): return redirect("/security-login")
     conn=get_db()
-    visitors=[dict(r) for r in conn.execute(
+    visitors=[dict(r) for r in _fetchall(conn, 
         "SELECT id,name,phone,category,department,person_to_meet,status,created_at,checkout_at,exit_at,pass_number,photo FROM visitors ORDER BY id DESC LIMIT 80"
-    ).fetchall()]
+    )]
     latest_id=visitors[0]["id"] if visitors else 0
-    lco=conn.execute("SELECT id FROM visitors WHERE checkout_at IS NOT NULL ORDER BY id DESC LIMIT 1").fetchone()
+    lco=_fetchone(conn, "SELECT id FROM visitors WHERE checkout_at IS NOT NULL ORDER BY id DESC LIMIT 1")
     lco_id=lco["id"] if lco else 0
     conn.close()
     rows=""
@@ -1562,15 +1686,64 @@ def security_dashboard():
 "'<div>Host: <b>'+d.host_name+'</b></div>'+"
 "'<div>Purpose: '+d.purpose+'</div>'+"
 "'<div style=\"font-size:12px;margin-top:4px\">Valid: '+d.valid_from+' - '+d.valid_till+'</div>'+"
+"'<div style=\"margin-top:12px;padding:12px;background:#F3F8FF;border-radius:10px;border:1.5px solid #1565C0\">'+"
+"'<div style=\"font-size:13px;font-weight:700;color:#1565C0;margin-bottom:8px\">&#128247; Capture Visitor Photo &amp; ID</div>'+"
+"'<div style=\"display:flex;gap:8px;flex-wrap:wrap\">'+"
+"'<button onclick=\"startGpCam(\\\"photo\\\")\" style=\"flex:1;min-width:100px;padding:8px;background:#1565C0;color:white;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer\">&#128100; Photo</button>'+"
+"'<button onclick=\"startGpCam(\\\"id_front\\\")\" style=\"flex:1;min-width:100px;padding:8px;background:#2E7D32;color:white;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer\">&#128196; ID Front</button>'+"
+"'<button onclick=\"startGpCam(\\\"id_back\\\")\" style=\"flex:1;min-width:100px;padding:8px;background:#6A1B9A;color:white;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer\">&#128196; ID Back</button>'+"
+"'</div>'+"
+"'<div id=\"gp-cam-area\" style=\"margin-top:8px\"></div>'+"
+"'<div id=\"gp-previews\" style=\"display:flex;gap:6px;flex-wrap:wrap;margin-top:6px\"></div>'+"
+"'</div>'+"
 "'<a href=\"/gate-pass/'+d.gate_pass_id+'\" target=\"_blank\" style=\"display:inline-block;margin-top:8px;padding:7px 14px;background:#1565C0;color:white;border-radius:8px;text-decoration:none\">View Full Pass</a>';"
-"res.style.display='block';_beep(3);"
+"_currentGpId=d.gate_pass_id;res.style.display='block';_beep(3);"
 "fetch('/api/notify-gate-pass-entry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gate_pass_id:d.gate_pass_id})});var _gpid=d.gate_pass_id;var _pollTimer=setInterval(function(){fetch('/api/gate-pass-approval-status').then(function(r){return r.json();}).then(function(s){if(s.entry&&s.entry.id==_gpid){clearInterval(_pollTimer);if(s.entry.status==='approved'){res.style.cssText='background:#E8F5E9;color:#1B5E20;border:2px solid #2E7D32;padding:14px;border-radius:10px';res.innerHTML='<div style=\"font-size:20px;margin-bottom:6px\">&#10003; HOST APPROVED!</div><b>'+d.visitor_name+'</b> - Entry Confirmed<br><span style=\"font-size:12px\">Host: '+d.host_name+'</span>';_beep(3);}else if(s.entry.status==='rejected'){res.style.cssText='background:#FFEBEE;color:#C62828;border:2px solid #C62828;padding:14px;border-radius:10px';res.innerHTML='&#10007; HOST REJECTED! Do not allow entry.';;_beep(2);}}});},3000);"
 "}else{"
 "res.style.cssText='background:#FFEBEE;color:#C62828;border:2px solid #C62828;padding:14px;border-radius:10px';"
 "res.innerHTML='&#10007; Invalid OTP! Please check and try again.';"
 "res.style.display='block';_beep(2);}});"
 "}"
-"var _lv="+str(latest_id)+",_lco="+str(lco_id)+";"
+"var _lv="+str(latest_id)+",_lco="+str(lco_id)+",_currentGpId=0,_gpCaptures={};"\
+            "function showNB(msg,dur){var b=document.getElementById('nb');b.innerHTML=msg;b.style.display='block';setTimeout(function(){b.style.display='none';},dur||8000);}"\
+            "var _gpCamStream=null;"\
+            "async function startGpCam(side){"\
+            "var area=document.getElementById('gp-cam-area');"\
+            "if(_gpCamStream){_gpCamStream.getTracks().forEach(function(t){t.stop();});}"\
+            "try{"\
+            "var facingMode=side==='photo'?'user':'environment';"\
+            "_gpCamStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:facingMode}});"\
+            "area.innerHTML='<video id=\"gp-video\" autoplay playsinline style=\"width:100%;max-height:180px;border-radius:8px;background:#000\"></video>'+"\
+            "'<canvas id=\"gp-canvas\" style=\"display:none\"></canvas>'+"\
+            "'<div style=\"display:flex;gap:8px;margin-top:6px\">'+"\
+            "'<button onclick=\"captureGp(\\''+side+'\\')\" style=\"flex:1;padding:8px;background:#1565C0;color:white;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer\">&#128247; Capture</button>'+"\
+            "'<button onclick=\"cancelGpCam()\" style=\"padding:8px 14px;background:#EEE;border:none;border-radius:8px;font-size:13px;cursor:pointer\">Cancel</button>'+"\
+            "'</div>';"\
+            "document.getElementById('gp-video').srcObject=_gpCamStream;"\
+            "}catch(e){alert('Camera access denied!');}"\
+            "}"\
+            "function cancelGpCam(){if(_gpCamStream){_gpCamStream.getTracks().forEach(function(t){t.stop();});_gpCamStream=null;}var area=document.getElementById('gp-cam-area');if(area)area.innerHTML='';}"\
+            "function captureGp(side){"\
+            "var v=document.getElementById('gp-video');var c=document.getElementById('gp-canvas');"\
+            "c.width=v.videoWidth||320;c.height=v.videoHeight||240;c.getContext('2d').drawImage(v,0,0);"\
+            "var data=c.toDataURL('image/jpeg',0.8);_gpCaptures[side]=data;"\
+            "if(_gpCamStream){_gpCamStream.getTracks().forEach(function(t){t.stop();});_gpCamStream=null;}"\
+            "var area=document.getElementById('gp-cam-area');if(area)area.innerHTML='';"\
+            "var prev=document.getElementById('gp-previews');"\
+            "var label={'photo':'Photo','id_front':'ID Front','id_back':'ID Back'}[side]||side;"\
+            "var existing=prev.querySelector('[data-side=\"'+side+'\"]');"\
+            "var el=document.createElement('div');el.setAttribute('data-side',side);"\
+            "el.style.cssText='text-align:center';"\
+            "el.innerHTML='<div style=\"font-size:10px;color:#888;margin-bottom:2px\">'+label+'</div>'+"\
+            "'<img src=\"'+data+'\" style=\"width:70px;height:70px;object-fit:cover;border-radius:6px;border:2px solid #1565C0\">';"\
+            "if(existing)prev.replaceChild(el,existing);else prev.appendChild(el);"\
+            "saveGpCaptures();"\
+            "}"\
+            "async function saveGpCaptures(){"\
+            "if(!_currentGpId||Object.keys(_gpCaptures).length===0)return;"\
+            "await fetch('/api/save-gate-pass-media',{method:'POST',headers:{'Content-Type':'application/json'},"\
+            "body:JSON.stringify({gate_pass_id:_currentGpId,photo:_gpCaptures.photo||null,id_front:_gpCaptures.id_front||null,id_back:_gpCaptures.id_back||null})});"\
+            "}"\
             "function showNB(msg,dur){var b=document.getElementById('nb');b.innerHTML=msg;b.style.display='block';setTimeout(function(){b.style.display='none';},dur||8000);}"
             "async function secExit(id){"
             "if(!confirm('Confirm visitor has physically exited the premises?'))return;"
@@ -1604,6 +1777,28 @@ def security_dashboard():
 @app.route("/security-logout")
 def security_logout():
     session.pop("security_ok",None); return redirect("/security-login")
+
+@app.route("/api/save-gate-pass-media", methods=["POST"])
+def save_gate_pass_media():
+    data = request.get_json()
+    gp_id = data.get("gate_pass_id")
+    if not gp_id:
+        return jsonify({"error": "Missing gate_pass_id"}), 400
+    conn = get_db()
+    updates = []
+    vals = []
+    if data.get("photo"):
+        updates.append("gp_photo=?"); vals.append(data["photo"])
+    if data.get("id_front"):
+        updates.append("gp_id_front=?"); vals.append(data["id_front"])
+    if data.get("id_back"):
+        updates.append("gp_id_back=?"); vals.append(data["id_back"])
+    if updates:
+        vals.append(gp_id)
+        _exec(conn, "UPDATE gate_passes SET " + ",".join(updates) + " WHERE id=?", vals)
+        conn.commit()
+    conn.close()
+    return jsonify({"success": True})
 
 @app.route("/manifest.json")
 def manifest():
@@ -1639,17 +1834,17 @@ def create_gate_pass():
         valid_till=(dt+timedelta(hours=3)).strftime("%d %b %Y, %I:%M %p")
     except:
         valid_from=now; valid_till=now
-    conn.execute("INSERT INTO gate_passes (meeting_id,host_name,visitor_name,visitor_phone,purpose,otp,valid_from,valid_till,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+    _exec(conn, "INSERT INTO gate_passes (meeting_id,host_name,visitor_name,visitor_phone,purpose,otp,valid_from,valid_till,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
                  (data.get("meeting_id"),data.get("host_name"),data.get("visitor_name"),data.get("visitor_phone"),data.get("purpose","Meeting"),otp,valid_from,valid_till,now))
     conn.commit()
-    gp=conn.execute("SELECT id FROM gate_passes ORDER BY id DESC LIMIT 1").fetchone()
+    gp=_fetchone(conn, "SELECT id FROM gate_passes ORDER BY id DESC LIMIT 1")
     conn.close()
     return jsonify({"success":True,"gate_pass_id":gp["id"],"otp":otp})
 
 @app.route("/api/verify-gate-pass-otp", methods=["POST"])
 def verify_gate_pass_otp():
     data=request.get_json(); conn=get_db()
-    gp=conn.execute("SELECT * FROM gate_passes WHERE otp=? AND status='active'", (data.get("otp",""),)).fetchone()
+    gp=_fetchone(conn, "SELECT * FROM gate_passes WHERE otp=? AND status='active'", (data.get("otp",""),))
     conn.close()
     if gp:
         return jsonify({"success":True,"visitor_name":gp["visitor_name"],"visitor_phone":gp["visitor_phone"],"host_name":gp["host_name"],"purpose":gp["purpose"],"valid_from":gp["valid_from"],"valid_till":gp["valid_till"],"gate_pass_id":gp["id"]})
@@ -1659,19 +1854,19 @@ def verify_gate_pass_otp():
 @app.route("/api/notify-gate-pass-entry", methods=["POST"])
 def notify_gate_pass_entry():
     data=request.get_json(); conn=get_db()
-    conn.execute("UPDATE gate_passes SET status='gate_pending' WHERE id=?",(data.get("gate_pass_id"),))
+    _exec(conn, "UPDATE gate_passes SET status='gate_pending' WHERE id=?",(data.get("gate_pass_id"),))
     conn.commit(); conn.close()
     return jsonify({"success":True})
 
 @app.route("/api/latest-gate-pass-entry")
 def latest_gate_pass_entry():
     conn=get_db()
-    row=conn.execute("SELECT * FROM gate_passes WHERE status='gate_pending' ORDER BY id DESC LIMIT 1").fetchone()
+    row=_fetchone(conn, "SELECT * FROM gate_passes WHERE status='gate_pending' ORDER BY id DESC LIMIT 1")
     conn.close(); return jsonify({"entry":dict(row) if row else None})
 
 @app.route("/gate-pass/<int:gpid>")
 def view_gate_pass(gpid):
-    conn=get_db(); gp=conn.execute("SELECT * FROM gate_passes WHERE id=?",(gpid,)).fetchone(); conn.close()
+    conn=get_db(); gp=_fetchone(conn, "SELECT * FROM gate_passes WHERE id=?",(gpid,)); conn.close()
     if not gp: return "Gate Pass not found",404
     gp=dict(gp)
     qr_img=""
@@ -1781,24 +1976,24 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f4f8;min-height:100vh
 def approve_gate_pass():
     data=request.get_json(); conn=get_db(); now=get_ist()
     gp_id=data.get("gate_pass_id")
-    gp=conn.execute("SELECT * FROM gate_passes WHERE id=?",(gp_id,)).fetchone()
+    gp=_fetchone(conn, "SELECT * FROM gate_passes WHERE id=?",(gp_id,))
     if not gp: conn.close(); return jsonify({"success":False})
     gp=dict(gp)
-    conn.execute("UPDATE gate_passes SET status='approved',approved_at=? WHERE id=?",(now,gp_id))
+    _exec(conn, "UPDATE gate_passes SET status='approved',approved_at=? WHERE id=?",(now,gp_id))
     # Water order for pantry
-    conn.execute("INSERT INTO pantry_orders (visitor_name,person_to_meet,drink,quantity,note,created_at,order_type) VALUES (?,?,?,?,?,?,?)",
+    _exec(conn, "INSERT INTO pantry_orders (visitor_name,person_to_meet,drink,quantity,note,created_at,order_type) VALUES (?,?,?,?,?,?,?)",
                  (gp["visitor_name"],gp["host_name"],"Water",1,"Guest arrived - Gate Pass",now,"gate_guest"))
     # Add to visitors table so normal flow works (order table, checkout etc)
-    conn.execute("INSERT INTO visitors (name,phone,person_to_meet,department,category,purpose,status,created_at) VALUES (?,?,?,?,?,?,?,?)",
+    _exec(conn, "INSERT INTO visitors (name,phone,person_to_meet,department,category,purpose,status,created_at) VALUES (?,?,?,?,?,?,?,?)",
                  (gp["visitor_name"],gp.get("visitor_phone",""),gp["host_name"],"Gate Pass","Gate Pass Guest",gp["purpose"],"approved",now))
-    vid=conn.execute("SELECT id FROM visitors ORDER BY id DESC LIMIT 1").fetchone()["id"]
+    vid=_fetchone(conn, "SELECT id FROM visitors ORDER BY id DESC LIMIT 1")["id"]
     conn.commit(); conn.close()
     return jsonify({"success":True,"visitor_name":gp["visitor_name"],"host_name":gp["host_name"],"gate_pass_id":gp_id,"visitor_id":vid})
 
 @app.route("/api/reject-gate-pass", methods=["POST"])
 def reject_gate_pass():
     data=request.get_json(); conn=get_db()
-    conn.execute("UPDATE gate_passes SET status='rejected' WHERE id=?",(data.get("gate_pass_id"),))
+    _exec(conn, "UPDATE gate_passes SET status='rejected' WHERE id=?",(data.get("gate_pass_id"),))
     conn.commit(); conn.close()
     return jsonify({"success":True})
 
@@ -1806,14 +2001,14 @@ def reject_gate_pass():
 def host_pending_gate_passes():
     if "emp_name" not in session: return jsonify({"passes":[]})
     conn=get_db()
-    rows=conn.execute("SELECT * FROM gate_passes WHERE host_name=? AND status='gate_pending' ORDER BY id DESC",(session["emp_name"],)).fetchall()
+    rows=_fetchall(conn, "SELECT * FROM gate_passes WHERE host_name=? AND status='gate_pending' ORDER BY id DESC",(session["emp_name"],))
     conn.close()
     return jsonify({"passes":[dict(r) for r in rows]})
 
 @app.route("/api/all-gate-pass-entries")
 def all_gate_pass_entries():
     conn=get_db()
-    rows=conn.execute("SELECT * FROM gate_passes WHERE status IN ('gate_pending','approved','rejected','used') ORDER BY id DESC LIMIT 50").fetchall()
+    rows=_fetchall(conn, "SELECT * FROM gate_passes WHERE status IN ('gate_pending','approved','rejected','used') ORDER BY id DESC LIMIT 50")
     conn.close()
     return jsonify({"entries":[dict(r) for r in rows]})
 
@@ -1821,7 +2016,7 @@ def all_gate_pass_entries():
 @app.route("/api/gate-pass-approval-status")
 def gate_pass_approval_status():
     conn=get_db()
-    row=conn.execute("SELECT * FROM gate_passes WHERE status IN ('approved','rejected') ORDER BY id DESC LIMIT 1").fetchone()
+    row=_fetchone(conn, "SELECT * FROM gate_passes WHERE status IN ('approved','rejected') ORDER BY id DESC LIMIT 1")
     conn.close()
     return jsonify({"entry":dict(row) if row else None})
 
@@ -1830,7 +2025,7 @@ def gate_pass_approval_status():
 @app.route("/api/debug-gate-passes")
 def debug_gate_passes():
     conn=get_db()
-    rows=conn.execute("SELECT id,host_name,status,approved_at,created_at FROM gate_passes ORDER BY id DESC LIMIT 5").fetchall()
+    rows=_fetchall(conn, "SELECT id,host_name,status,approved_at,created_at FROM gate_passes ORDER BY id DESC LIMIT 5")
     conn.close()
     from datetime import datetime as _dt,timezone as _tz,timedelta as _tda
     ist_now=_dt.now(_tz(_tda(hours=5,minutes=30))).replace(tzinfo=None)
