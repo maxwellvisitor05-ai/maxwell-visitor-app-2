@@ -877,7 +877,7 @@ def admin():
             +"var _ol="+str(lp_id)+",_oc="+str(lco_id)+",_sl="+str(ls_id)+",_aq={},_fw=true;"
             "var _vt="+json.dumps(visitor_times)+";"
             "function doExport(){var fr=document.getElementById('f-from').value,to=document.getElementById('f-to').value,dept=document.getElementById('f-dept').value,st=document.getElementById('f-status').value;window.open('/admin/export?from='+encodeURIComponent(fr)+'&to='+encodeURIComponent(to)+'&dept='+encodeURIComponent(dept)+'&status='+encodeURIComponent(st));}"
-            "async function act(id,action){if(!confirm(action+' this visitor?'))return;await fetch('/action/'+id+'/'+action,{headers:{'Accept':'application/json'}});location.reload();}"
+            "async function act(id,action){if(!confirm(action+' this visitor?'))return;await fetch('/action/'+id+'/'+action,{headers:{'Accept':'application/json'}});if(action==='approve')window.open('/pass/'+id);location.reload();}"
             "async function chk(id){if(!confirm('Checkout?'))return;await fetch('/api/checkout/'+id,{method:'POST'});location.reload();}"
             "function changeAQty(v,d){if(!_aq[v])_aq[v]=1;_aq[v]=Math.max(1,_aq[v]+d);document.getElementById('aqty-'+v).textContent=_aq[v];}"
             "async function adminOrder(vid,vname,person){var drink=document.getElementById('adrk-'+vid).value;var qty=_aq[vid]||1;var snacks=document.getElementById('asnk-'+vid).value;"
@@ -1449,7 +1449,7 @@ async function confirmOrder(vid,vname,person){
   showNB('&#10003; Order sent!',5000);_beep(2);document.getElementById('ord-'+vid).style.display='none';document.getElementById('drk-'+vid).value='';document.getElementById('snk-'+vid).value='';document.getElementById('nte-'+vid).value='';_qty[vid]=1;document.getElementById('qty-'+vid).textContent='1';}
 async function act(id,action){if(!confirm(action+' this visitor?'))return;
   await fetch('/action/'+id+'/'+action,{headers:{'Accept':'application/json'}});
-  location.reload();}
+  if(action==='approve')window.open('/pass/'+id);location.reload();}
 async function checkout(id){if(!confirm('Checkout?'))return;await fetch('/api/checkout/'+id,{method:'POST'});var card=document.getElementById('avc-'+id);if(card)card.remove();var ord=document.getElementById('ord-'+id);if(ord)ord.remove();}
 async function showVisitorDetail(id,e){
   if(e&&e.target&&(e.target.tagName==='BUTTON'||e.target.tagName==='SELECT'||e.target.tagName==='INPUT'))return;
@@ -1689,9 +1689,9 @@ def security_dashboard():
 "'<div style=\"margin-top:12px;padding:12px;background:#F3F8FF;border-radius:10px;border:1.5px solid #1565C0\">'+"
 "'<div style=\"font-size:13px;font-weight:700;color:#1565C0;margin-bottom:8px\">&#128247; Capture Visitor Photo &amp; ID</div>'+"
 "'<div style=\"display:flex;gap:8px;flex-wrap:wrap\">'+"
-""'<button onclick=\"startGpCam(&#39;photo&#39;)\" style=...>&#128100; Photo</button>'+"
-"'<button onclick=\"startGpCam(&#39;id_front&#39;)\" style=...>&#128196; ID Front</button>'+"
-"'<button onclick=\"startGpCam(&#39;id_back&#39;)\" style=...>&#128196; ID Back</button>'+"
+"'<button data-side=\"photo\" onclick=\"startGpCam(this.dataset.side)\" style=\"flex:1;min-width:100px;padding:8px;background:#1565C0;color:white;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer\">&#128100; Photo</button>'+"
+"'<button data-side=\"id_front\" onclick=\"startGpCam(this.dataset.side)\" style=\"flex:1;min-width:100px;padding:8px;background:#2E7D32;color:white;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer\">&#128196; ID Front</button>'+"
+"'<button data-side=\"id_back\" onclick=\"startGpCam(this.dataset.side)\" style=\"flex:1;min-width:100px;padding:8px;background:#6A1B9A;color:white;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer\">&#128196; ID Back</button>'+"
 "'</div>'+"
 "'<div id=\"gp-cam-area\" style=\"margin-top:8px\"></div>'+"
 "'<div id=\"gp-previews\" style=\"display:flex;gap:6px;flex-wrap:wrap;margin-top:6px\"></div>'+"
