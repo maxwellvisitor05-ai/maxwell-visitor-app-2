@@ -1349,15 +1349,8 @@ def admin_staff_toggle():
     sent = send_hr_approval_email("Request to <b>"+action_label+"</b> staff member: <b>"+row["name"]+"</b>", token)
     return jsonify({"success":True,"pending":True,"email_sent":sent,"message":"Sent to HR ("+HR_APPROVER_EMAIL+") for approval"})
 
-@app.route("/hr-approve/<token>")
-def hr_approve_action(token):
-    conn=get_db()
-    row=_fetchone(conn, "SELECT * FROM staff_pending_actions WHERE token=?", (token,))
-    if not row:
-        conn.close(); return _hr_result_page("Invalid or expired link.", False)
-    row=dict(row)
-    if row["status"] != "pending":
-        conn.close(); return _hr_result_page("This request was already "+row["status"]+".", row["status"]=="approved")
+def _apply_staff_pending_action(conn, row):
+    """Applies an approved pending action to the staff table. Returns (ok, error_message)."""
     payload = json.loads(row["payload"] or "{}")
     action = row["action"]
     try:
@@ -1373,12 +1366,75 @@ def hr_approve_action(token):
             _exec(conn, "UPDATE staff SET active=? WHERE id=?", (new_active, row["staff_id"]))
         _exec(conn, "UPDATE staff_pending_actions SET status='approved',decided_at=? WHERE id=?", (get_ist(), row["id"]))
         conn.commit()
+        return True, ""
     except Exception as e:
         if HAS_PG and DATABASE_URL: conn.rollback()
-        conn.close()
-        log.exception("hr_approve_action failed")
-        return _hr_result_page("Something went wrong applying this change: "+str(e), False)
+        log.exception("_apply_staff_pending_action failed")
+        return False, str(e)
+
+def _is_hr_approver():
+    return bool(session.get("emp_email")) and (session.get("emp_email","").lower() == HR_APPROVER_EMAIL.lower())
+
+@app.route("/api/hr-pending-actions")
+def api_hr_pending_actions():
+    if not _is_hr_approver(): return jsonify({"actions":[]})
+    conn=get_db()
+    rows=[dict(r) for r in _fetchall(conn, "SELECT * FROM staff_pending_actions WHERE status='pending' ORDER BY id DESC")]
     conn.close()
+    action_labels={"add":"Add new staff","edit":"Edit staff","toggle":"Remove/Reactivate staff"}
+    out=[]
+    for r in rows:
+        payload=json.loads(r.get("payload") or "{}")
+        detail = payload.get("name","")
+        if not detail and r.get("staff_id"):
+            sconn=get_db(); srow=_fetchone(sconn, "SELECT name FROM staff WHERE id=?", (r["staff_id"],)); sconn.close()
+            detail = srow["name"] if srow else ("Staff #"+str(r["staff_id"]))
+        out.append({"id":r["id"],"token":r["token"],"action":r["action"],"label":action_labels.get(r["action"],r["action"]),"detail":detail,"created_at":r["created_at"]})
+    return jsonify({"actions":out})
+
+@app.route("/api/hr-approve-action", methods=["POST"])
+def api_hr_approve_action():
+    if not _is_hr_approver(): return jsonify({"success":False,"error":"Not authorized"}),401
+    token=(request.get_json() or {}).get("token","")
+    conn=get_db()
+    row=_fetchone(conn, "SELECT * FROM staff_pending_actions WHERE token=?", (token,))
+    if not row:
+        conn.close(); return jsonify({"success":False,"error":"Not found"})
+    row=dict(row)
+    if row["status"] != "pending":
+        conn.close(); return jsonify({"success":False,"error":"Already "+row["status"]})
+    ok, err = _apply_staff_pending_action(conn, row)
+    conn.close()
+    return jsonify({"success":ok,"error":err})
+
+@app.route("/api/hr-reject-action", methods=["POST"])
+def api_hr_reject_action():
+    if not _is_hr_approver(): return jsonify({"success":False,"error":"Not authorized"}),401
+    token=(request.get_json() or {}).get("token","")
+    conn=get_db()
+    row=_fetchone(conn, "SELECT * FROM staff_pending_actions WHERE token=?", (token,))
+    if not row:
+        conn.close(); return jsonify({"success":False,"error":"Not found"})
+    row=dict(row)
+    if row["status"] != "pending":
+        conn.close(); return jsonify({"success":False,"error":"Already "+row["status"]})
+    _exec(conn, "UPDATE staff_pending_actions SET status='rejected',decided_at=? WHERE id=?", (get_ist(), row["id"]))
+    conn.commit(); conn.close()
+    return jsonify({"success":True})
+
+@app.route("/hr-approve/<token>")
+def hr_approve_action(token):
+    conn=get_db()
+    row=_fetchone(conn, "SELECT * FROM staff_pending_actions WHERE token=?", (token,))
+    if not row:
+        conn.close(); return _hr_result_page("Invalid or expired link.", False)
+    row=dict(row)
+    if row["status"] != "pending":
+        conn.close(); return _hr_result_page("This request was already "+row["status"]+".", row["status"]=="approved")
+    ok, err = _apply_staff_pending_action(conn, row)
+    conn.close()
+    if not ok:
+        return _hr_result_page("Something went wrong applying this change: "+err, False)
     return _hr_result_page("Approved and applied successfully.", True)
 
 @app.route("/hr-reject/<token>")
@@ -1847,6 +1903,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-s
 """<div class="nb" id="nb-bar"></div>
 <div class="pg">
 <div id="gp-approval-sec" style="display:none;padding:0 0 10px 0"></div>
+<div id="hr-approval-sec" style="display:none;padding:0 0 10px 0"></div>
 <div class="sc"><div class="sc-hdr"><div class="sc-ttl"><div class="sc-ico">&#128100;</div>Active Visitors</div></div>"""+active_cards+"""</div>
 <div class="sw"><div class="sr">
   <div class="si2 c1"><div class="si2-ico">&#128101;</div><div class="si2-num">"""+str(today_count)+"""</div><div class="si2-lbl">Today</div></div>
@@ -2023,7 +2080,15 @@ async function checkGatePasses(){try{var r=await fetch('/api/host-pending-gate-p
 async function approveGP(id){var r=await fetch('/api/approve-gate-pass',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gate_pass_id:id})});var d=await r.json();_beep(2);delete _gp_pending[id];location.reload();}
 async function rejectGP(id){fetch('/api/reject-gate-pass',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gate_pass_id:id})}).then(function(){delete _gp_pending[id];checkGatePasses();});}
 setInterval(checkNew,8000);checkNew();setInterval(chkReveal,15000);chkReveal();
-setInterval(checkGatePasses,5000);checkGatePasses();</script></body></html>""").replace("MLOGO",LOGO_MAIN).replace("EPHOTO",emp_photo).replace("EPHOTO2",emp_photo).replace("EMPNAME",name).replace("EMPEMAIL",email).replace("EMPDEPT",emp_dept).replace("EMPDESIG",emp_desig)
+async function checkHRActions(){try{var r=await fetch('/api/hr-pending-actions');var d=await r.json();var sec=document.getElementById('hr-approval-sec');if(!sec)return;
+if(d.actions&&d.actions.length>0){sec.style.display='block';var html='';d.actions.forEach(function(a){if(!_hr_pending[a.token]){_hr_pending[a.token]=true;_beep(3);}
+html+='<div style="background:#F3E5F5;border:2px solid #9C27B0;border-radius:12px;padding:14px;margin-bottom:10px">'+'<b style="color:#6A1B9A">&#128101; Staff Approval Needed</b><br>'+'<b>'+a.label+'</b>: '+a.detail+'<div style="display:flex;gap:8px;margin-top:8px">'+'<button onclick="approveHR(\\''+a.token+'\\')" style="flex:1;padding:8px;background:#2E7D32;color:white;border:none;border-radius:8px;font-weight:700;cursor:pointer">&#10003; Approve</button>'+'<button onclick="rejectHR(\\''+a.token+'\\')" style="flex:1;padding:8px;background:#C62828;color:white;border:none;border-radius:8px;font-weight:700;cursor:pointer">&#10007; Reject</button>'+'</div></div>';});sec.innerHTML=html;
+var cnt=document.getElementById('nb-cnt');if(cnt){cnt.style.display='block';cnt.textContent=d.actions.length;}
+}else{sec.style.display='none';}}catch(e){}}
+async function approveHR(token){var r=await fetch('/api/hr-approve-action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:token})});var d=await r.json();if(d.success){delete _hr_pending[token];checkHRActions();}else{alert(d.error||'Failed');}}
+async function rejectHR(token){var r=await fetch('/api/hr-reject-action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:token})});var d=await r.json();if(d.success){delete _hr_pending[token];checkHRActions();}else{alert(d.error||'Failed');}}
+var _hr_pending={};
+setInterval(checkGatePasses,5000);checkGatePasses();setInterval(checkHRActions,7000);checkHRActions();</script></body></html>""").replace("MLOGO",LOGO_MAIN).replace("EPHOTO",emp_photo).replace("EPHOTO2",emp_photo).replace("EMPNAME",name).replace("EMPEMAIL",email).replace("EMPDEPT",emp_dept).replace("EMPDESIG",emp_desig)
 
 @app.route("/employee-logout")
 def employee_logout():
