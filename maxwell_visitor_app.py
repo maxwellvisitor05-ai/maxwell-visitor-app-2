@@ -2244,6 +2244,7 @@ def director_dashboard():
             "@media(max-width:800px){.grid2{grid-template-columns:1fr}.stats{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}}"
             ".card{background:white;border-radius:12px;padding:18px;box-shadow:0 2px 10px rgba(0,0,0,0.08);margin-bottom:16px}"
             ".card h3{color:#333;margin-bottom:12px;font-size:14px;display:flex;align-items:center;gap:6px}"
+            "canvas{max-height:260px}"
             "</style></head><body>"+hdr+
             "<div class='container'>"
             "<h1 class='pg-title'>&#128202; Director Dashboard</h1>"
@@ -2272,6 +2273,7 @@ def director_dashboard():
             "</div>"
             "<script>"
             "Chart.register(ChartDataLabels);"
+            "Chart.defaults.maintainAspectRatio=false;"
             "Chart.defaults.set('plugins.datalabels',{color:'#333',font:{weight:'700',size:11}});"
             "var durLabels="+json.dumps(list(dur_buckets.keys()))+",durData="+json.dumps(list(dur_buckets.values()))+";"
             "var deptLabels="+json.dumps(list(dept_counts.keys()))+",deptData="+json.dumps(list(dept_counts.values()))+";"
