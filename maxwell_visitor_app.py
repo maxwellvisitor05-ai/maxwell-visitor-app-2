@@ -2,7 +2,7 @@
 """Maxwell Engineering Solutions - Visitor Management System v3.0"""
 
 from flask import Flask, request, jsonify, redirect, session, send_file
-import base64, io, os, hashlib, json
+import base64, io, os, hashlib, json, secrets, logging
 from datetime import datetime, timezone, timedelta
 try:
     import psycopg2, psycopg2.extras
@@ -24,8 +24,18 @@ try:
 except:
     HAS_EXCEL = False
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+log = logging.getLogger("maxwell")
+
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'maxwell2024secret')
+# Secret key must come from the environment in production. If it's missing we
+# generate a random one for this process instead of falling back to a fixed,
+# guessable string -- a hardcoded secret key lets anyone forge session cookies.
+_env_secret = os.environ.get('SECRET_KEY')
+if not _env_secret:
+    log.warning("SECRET_KEY not set in environment - generating a random one for this run. "
+                "Sessions will be invalidated on restart. Set SECRET_KEY in your environment for production.")
+app.secret_key = _env_secret or secrets.token_hex(32)
 app.permanent_session_lifetime = __import__('datetime').timedelta(days=30)
 
 @app.before_request
@@ -198,6 +208,11 @@ def init_db():
         user_email TEXT, user_name TEXT,
         created_at TEXT, expires_at TEXT
     )""")
+    _exec(conn, """CREATE TABLE IF NOT EXISTS staff (
+        id """+pk+""", name TEXT UNIQUE, email TEXT UNIQUE,
+        department TEXT, is_management INTEGER DEFAULT 0,
+        active INTEGER DEFAULT 1, created_at TEXT
+    )""")
     # Add missing columns safely
     extra_visitors = ["id_front TEXT","id_back TEXT","exit_at TEXT","reschedule_date TEXT","reschedule_time TEXT","checkout_at TEXT","advance_token TEXT"]
     extra_orders = ["snacks TEXT","order_type TEXT DEFAULT 'drink'"]
@@ -214,10 +229,32 @@ def init_db():
     if HAS_PG and DATABASE_URL:
         _exec(conn, "INSERT INTO app_settings (key,value) VALUES (%s,%s) ON CONFLICT DO NOTHING", ('admin_pin','1234'))
         _exec(conn, "INSERT INTO app_settings (key,value) VALUES (%s,%s) ON CONFLICT DO NOTHING", ('security_pass','1234'))
+        _exec(conn, "INSERT INTO app_settings (key,value) VALUES (%s,%s) ON CONFLICT DO NOTHING", ('director_pin','7788'))
     else:
         _exec(conn, "INSERT OR IGNORE INTO app_settings (key,value) VALUES ('admin_pin','1234')")
         _exec(conn, "INSERT OR IGNORE INTO app_settings (key,value) VALUES ('security_pass','1234')")
-    conn.commit(); conn.close()
+        _exec(conn, "INSERT OR IGNORE INTO app_settings (key,value) VALUES ('director_pin','7788')")
+    conn.commit()
+
+    # One-time migration: seed the staff table from the legacy hardcoded dicts,
+    # so existing employees keep working with zero manual re-entry.
+    existing = _fetchone(conn, "SELECT COUNT(*) as cnt FROM staff")
+    if existing and int(existing["cnt"]) == 0:
+        now = get_ist()
+        mgmt_set = set(MANAGEMENT_LIST)
+        dept_of = {}
+        for d, members in DEPARTMENTS.items():
+            for m in members: dept_of[m] = d
+        for name, email in EMPLOYEE_EMAILS.items():
+            dept = dept_of.get(name, "Others")
+            is_mgmt = 1 if name in mgmt_set else 0
+            try:
+                _exec(conn, "INSERT INTO staff (name,email,department,is_management,active,created_at) VALUES (?,?,?,?,1,?)",
+                      (name, email, dept, is_mgmt, now))
+            except Exception as e:
+                log.warning("Could not seed staff row for %s: %s", name, e)
+        conn.commit()
+    conn.close()
 
 def get_setting(key, default=""):
     conn = get_db()
@@ -228,6 +265,45 @@ def set_setting(key, value):
     conn = get_db()
     _exec(conn, ("INSERT INTO app_settings (key,value) VALUES (%s,%s) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value" if (HAS_PG and DATABASE_URL) else "INSERT OR REPLACE INTO app_settings (key,value) VALUES (?,?)"), (key,value))
     conn.commit(); conn.close()
+
+FACTORY_DEPT_NAMES = {"Operation","QA","QC","Maintenance"}
+
+def get_all_staff(active_only=True):
+    conn = get_db()
+    q = "SELECT * FROM staff"
+    if active_only: q += " WHERE active=1"
+    q += " ORDER BY department, name"
+    rows = [dict(r) for r in _fetchall(conn, q)]
+    conn.close()
+    return rows
+
+def get_staff_depts_map():
+    """{department: [names]} for non-management active staff -- drives the
+    Staff Visit dropdown on the visitor form."""
+    out = {}
+    for s in get_all_staff():
+        if s["is_management"]: continue
+        d = s["department"] or "Others"
+        out.setdefault(d, []).append(s["name"])
+    out.setdefault("Others", out.get("Others", []))
+    return out
+
+def get_factory_depts_map():
+    """Subset of departments used for the Factory Visit dropdown."""
+    return {d: names for d, names in get_staff_depts_map().items() if d in FACTORY_DEPT_NAMES}
+
+def get_management_names():
+    return [s["name"] for s in get_all_staff() if s["is_management"]]
+
+def get_staff_email_map():
+    """name -> email, active staff only (used for employee login)."""
+    return {s["name"]: s["email"] for s in get_all_staff()}
+
+def get_staff_dept_for_name(name):
+    conn = get_db()
+    row = _fetchone(conn, "SELECT department FROM staff WHERE name=?", (name,))
+    conn.close()
+    return row["department"] if row else ""
 
 def check_emp_password(email, password, emp_name):
     conn = get_db()
@@ -303,9 +379,9 @@ from flask import Flask, request, jsonify, redirect, session, send_file, Respons
 
 @app.route("/")
 def index():
-    depts_js = json.dumps(DEPARTMENTS)
-    factory_js = json.dumps(FACTORY_DEPTS)
-    header = make_header(LOGO_MAIN, '<a href="/admin">Admin</a><a href="/employee-login">Employee</a><a href="/pantry-login">Pantry</a><a href="/security-login">Security</a>')
+    depts_js = json.dumps(get_staff_depts_map())
+    factory_js = json.dumps(get_factory_depts_map())
+    header = make_header(LOGO_MAIN, '<a href="/admin">Admin</a><a href="/employee-login">Employee</a><a href="/pantry-login">Pantry</a><a href="/security-login">Security</a><a href="/director-login">Director</a>')
     return ("""<!DOCTYPE html><html lang="en"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Maxwell - Visitor Entry</title>
@@ -349,6 +425,13 @@ input:focus,textarea:focus,select:focus{border-color:#1565C0;background:white}
 <div class="row2">
   <div><label class="field-label">Full Name <span class="req">*</span></label><input type="text" id="v-name" placeholder="Full name"></div>
   <div><label class="field-label">Phone <span class="req">*</span></label><input type="tel" id="v-phone" placeholder="Mobile" onblur="lookupPhone(this.value)"></div>
+</div>
+<div id="reentry-banner" class="hidden" style="background:#E8F5E9;border:1.5px solid #2E7D32;border-radius:9px;padding:12px 14px;margin-bottom:14px;font-size:13px;color:#1b5e20">
+  <b>&#128075; Welcome back, <span id="reentry-name"></span>!</b> You've visited before — skip retaking your photo/ID with a quick re-entry.
+  <div style="margin-top:8px">
+    <button type="button" class="btn btn-green" style="padding:8px 16px" onclick="startQuickReentry()">&#9889; Quick Re-Entry</button>
+    <button type="button" style="background:none;border:none;color:#1b5e20;text-decoration:underline;font-size:12px;cursor:pointer;margin-left:8px" onclick="dismissReentry()">Fill full form instead</button>
+  </div>
 </div>
 <div class="row1"><label class="field-label">Company / Organization <span class="req">*</span></label><input type="text" id="v-company" placeholder="Company name"></div>
 <div class="row1"><label class="field-label">Name of Host</label><input type="text" id="v-host" placeholder="Who are you visiting?"></div>
@@ -420,7 +503,7 @@ input:focus,textarea:focus,select:focus{border-color:#1565C0;background:white}
 </div>
 </div>
 <script>
-var DEPTS=""" + depts_js + """;var FACTORY=""" + factory_js + """;var MGMT=""" + json.dumps(MANAGEMENT_LIST) + """;
+var DEPTS=""" + depts_js + """;var FACTORY=""" + factory_js + """;var MGMT=""" + json.dumps(get_management_names()) + """;
 var photoData=null,camStream=null,selDept="",selPerson="";
 var idFrontData=null,idBackData=null,idCamStream={};
 function onCat(){var cat=document.querySelector('input[name="category"]:checked');if(!cat)return;
@@ -478,6 +561,7 @@ function handleIdGallery(side,input){if(!input.files||!input.files[0])return;
     document.getElementById('id-'+side+'-icon').style.display='none';document.getElementById('id-'+side+'-ret').style.display='';};
   reader.readAsDataURL(input.files[0]);}
 function showAlert(msg){document.getElementById('alert-box').innerHTML='<div class="alert alert-error">'+msg+'</div>';setTimeout(function(){document.getElementById('alert-box').innerHTML='';},5000);}
+var _reentryData=null,_useQuickReentry=false;
 async function lookupPhone(phone){
   if(!phone||phone.length<6)return;
   try{var r=await fetch('/api/lookup-phone?phone='+encodeURIComponent(phone));var d=await r.json();
@@ -486,7 +570,24 @@ async function lookupPhone(phone){
       var hf=document.getElementById('v-host');
       if(nf&&!nf.value&&d.name){nf.value=d.name;nf.style.background='#E8F5E9';}
       if(hf&&!hf.value&&d.host_name){hf.value=d.host_name;hf.style.background='#E8F5E9';}
+      if(d.can_reentry){
+        _reentryData=d;
+        document.getElementById('reentry-name').textContent=d.name||'';
+        document.getElementById('reentry-banner').classList.remove('hidden');
+      }
     }}catch(e){}}
+function dismissReentry(){_useQuickReentry=false;document.getElementById('reentry-banner').classList.add('hidden');}
+function startQuickReentry(){
+  if(!_reentryData)return;
+  _useQuickReentry=true;
+  document.getElementById('v-name').value=_reentryData.name||'';
+  if(_reentryData.host_name)document.getElementById('v-host').value=_reentryData.host_name;
+  // Photo/ID are reused from the last visit, so hide those capture cards.
+  document.querySelectorAll('.card').forEach(function(c){
+    if(c.querySelector('#ph-icon')||c.querySelector('#id-front-icon')){c.style.display='none';}
+  });
+  document.getElementById('reentry-banner').innerHTML='<b>&#9889; Quick re-entry ready</b> — your photo and ID will be reused. Just fill purpose and person to meet below, then submit.';
+}
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js');}
 async function submitForm(){
   var name=document.getElementById('v-name').value.trim();var phone=document.getElementById('v-phone').value.trim();
@@ -497,10 +598,18 @@ async function submitForm(){
   var company=document.getElementById('v-company').value.trim();
   if(!name){showAlert('Please enter visitor name!');return;}
   if(!phone){showAlert('Please enter phone!');return;}
-  if(!company){showAlert('Please enter company!');return;}
   if(!purpose){showAlert('Please enter purpose!');return;}
   if(!cat){showAlert('Please select category!');return;}
   if(!person){showAlert('Please select person to meet!');return;}
+  if(_useQuickReentry){
+    try{var res=await fetch('/api/quick-reentry',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({phone:phone,purpose:purpose,host_name:host,category:cat,department:dept,person_to_meet:person})});
+      var data=await res.json();
+      if(data.success){document.getElementById('form-section').classList.add('hidden');document.getElementById('submitted-section').classList.remove('hidden');}
+      else{showAlert('Error: '+(data.error||'Unknown'));}}catch(e){showAlert('Server error!');}
+    return;
+  }
+  if(!company){showAlert('Please enter company!');return;}
   if(!idFrontData){showAlert('Please capture ID Card Front Side!');return;}
   try{var res=await fetch('/api/visitor',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({name:name,phone:phone,purpose:purpose,host_name:host,company:company,
@@ -530,16 +639,64 @@ def pending_count():
 
 @app.route("/api/lookup-phone")
 def lookup_phone():
-    """Auto-fill visitor form from previous visit by phone number"""
+    """Auto-fill visitor form from previous visit by phone number, and flag if a
+    quick re-entry (reusing stored photo/ID) is possible."""
     phone=request.args.get("phone","").strip()
     if not phone or len(phone)<6: return jsonify({"found":False})
     conn=get_db()
-    row=_fetchone(conn, "SELECT name,phone,host_name,purpose FROM visitors WHERE phone=? ORDER BY id DESC LIMIT 1",(phone,))
+    row=_fetchone(conn, "SELECT name,phone,host_name,purpose,category,department,person_to_meet,photo,id_front,id_back FROM visitors WHERE phone=? ORDER BY id DESC LIMIT 1",(phone,))
     conn.close()
     if row:
         r=dict(row)
-        return jsonify({"found":True,"name":r.get("name",""),"host_name":r.get("host_name","")})
+        can_reentry = bool(r.get("photo")) and bool(r.get("id_front"))
+        return jsonify({
+            "found":True,
+            "name":r.get("name",""),
+            "host_name":r.get("host_name",""),
+            "category":r.get("category",""),
+            "department":r.get("department",""),
+            "person_to_meet":r.get("person_to_meet",""),
+            "can_reentry":can_reentry
+        })
     return jsonify({"found":False})
+
+@app.route("/api/quick-reentry", methods=["POST"])
+def quick_reentry():
+    """Create a new pending visitor entry for a returning visitor, reusing their
+    last stored photo and ID images so they don't have to recapture them."""
+    data = request.get_json() or {}
+    phone = (data.get("phone") or "").strip()
+    if not phone or len(phone) < 6:
+        return jsonify({"success": False, "error": "Valid phone number required"})
+
+    conn = get_db()
+    prev = _fetchone(conn, "SELECT name,photo,id_front,id_back FROM visitors WHERE phone=? ORDER BY id DESC LIMIT 1", (phone,))
+    if not prev or not prev["photo"] or not prev["id_front"]:
+        conn.close()
+        return jsonify({"success": False, "error": "No previous visit with photo/ID found for this phone"})
+
+    prev = dict(prev)
+    purpose = (data.get("purpose") or "Repeat visit").strip() or "Repeat visit"
+    host_name = (data.get("host_name") or "").strip()
+    category = (data.get("category") or "").strip()
+    department = (data.get("department") or "").strip()
+    person_to_meet = (data.get("person_to_meet") or "").strip()
+    if not person_to_meet:
+        conn.close()
+        return jsonify({"success": False, "error": "Please select person to meet"})
+
+    now = get_ist()
+    cur = _exec(conn, "SELECT COUNT(*) FROM visitors")
+    row = cur.fetchone()
+    count = (row[0] if not isinstance(row, dict) else list(row.values())[0]) + 1
+    pass_num = "MW-" + datetime.now().strftime("%Y%m%d") + "-" + str(count).zfill(4)
+
+    _exec(conn, """INSERT INTO visitors (name,phone,purpose,host_name,category,department,person_to_meet,photo,created_at,pass_number,id_front,id_back) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (prev["name"], phone, purpose, host_name, category, department, person_to_meet, prev["photo"], now, pass_num, prev["id_front"], prev["id_back"]))
+    conn.commit()
+    vid = _fetchone(conn, "SELECT id FROM visitors ORDER BY id DESC LIMIT 1")["id"]
+    conn.close()
+    return jsonify({"success": True, "id": vid, "pass_number": pass_num})
 
 @app.route("/api/visitor-detail/<int:vid>")
 def visitor_detail(vid):
@@ -658,9 +815,7 @@ def admin_reset_password():
 def get_profile():
     if not session.get("emp_email"): return jsonify({"error":"Not logged in"}),401
     email=session["emp_email"];profile=get_employee_profile(email);emp_name=session.get("emp_name","")
-    dept=""
-    for d,members in DEPARTMENTS.items():
-        if emp_name in members: dept=d; break
+    dept=get_staff_dept_for_name(emp_name)
     return jsonify({"name":profile.get("name",emp_name),"email":email,"department":profile.get("department",dept),"designation":profile.get("designation",""),"photo":profile.get("photo",DEFAULT_PHOTO)})
 
 @app.route("/api/profile", methods=["POST"])
@@ -750,6 +905,7 @@ def admin():
     lp_id=lp["id"] if lp else 0; lco_id=lco["id"] if lco else 0; ls_id=ls["id"] if ls else 0
     drinks_opts="".join('<option value="'+d+'">'+d+'</option>' for d in DRINKS_MENU)
     visitor_times={str(v["id"]):v.get("created_at","") for v in active_visitors}
+    mgmt_visitor_ids=[str(v["id"]) for v in active_visitors if v.get("category")=="Management"]
 
     rows=""
     for v in visitors:
@@ -810,10 +966,10 @@ def admin():
                 "<td><span class='badge approved'>"+s["status"].upper()+"</span></td></tr>")
     if not srows: srows='<tr><td colspan="6" style="text-align:center;padding:15px;color:#999">No scheduled meetings</td></tr>'
 
-    erows="".join('<tr><td><b>'+n+'</b></td><td>'+e+'</td><td><button class="btn ba" onclick="resetPwd(\''+e+'\',\''+n+'\')">&#128274; Reset</button></td></tr>' for n,e in EMPLOYEE_EMAILS.items())
+    erows="".join('<tr><td><b>'+n+'</b></td><td>'+e+'</td><td><button class="btn ba" onclick="resetPwd(\''+e+'\',\''+n+'\')">&#128274; Reset</button></td></tr>' for n,e in get_staff_email_map().items())
     tab_a={t:"" for t in ["pending","approved","rejected","all"]}; tab_a[tab]="active"
-    depts_opt="".join('<option value="'+d+'">'+d+'</option>' for d in DEPARTMENTS)
-    hdr=make_header(LOGO_MAIN,'<a href="/admin/export">&#128196; Excel</a><a href="/pantry">&#9749; Pantry</a><a href="/security-login">&#128110; Security</a><a href="/admin/settings">&#9881; Settings</a><a href="/">Form</a><a href="/admin-logout">Logout</a>')
+    depts_opt="".join('<option value="'+d+'">'+d+'</option>' for d in get_staff_depts_map())
+    hdr=make_header(LOGO_MAIN,'<a href="/admin/export">&#128196; Excel</a><a href="/admin/staff">&#128101; Staff</a><a href="/admin/gate-pass">&#127915; Gate Pass</a><a href="/pantry">&#9749; Pantry</a><a href="/security-login">&#128110; Security</a><a href="/admin/settings">&#9881; Settings</a><a href="/">Form</a><a href="/admin-logout">Logout</a>')
 
     return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Maxwell Admin</title>"
             "<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial;background:#f0f4f8}"+HEADER_CSS
@@ -876,6 +1032,7 @@ def admin():
             "<script>"+BEEP_JS
             +"var _ol="+str(lp_id)+",_oc="+str(lco_id)+",_sl="+str(ls_id)+",_aq={},_fw=true;"
             "var _vt="+json.dumps(visitor_times)+";"
+            "var _mgmtIds="+json.dumps(mgmt_visitor_ids)+";"
             "function doExport(){var fr=document.getElementById('f-from').value,to=document.getElementById('f-to').value,dept=document.getElementById('f-dept').value,st=document.getElementById('f-status').value;window.open('/admin/export?from='+encodeURIComponent(fr)+'&to='+encodeURIComponent(to)+'&dept='+encodeURIComponent(dept)+'&status='+encodeURIComponent(st));}"
             "async function act(id,action){if(!confirm(action+' this visitor?'))return;await fetch('/action/'+id+'/'+action,{headers:{'Accept':'application/json'}});if(action==='approve')window.open('/pass/'+id);location.reload();}"
             "async function chk(id){if(!confirm('Checkout?'))return;await fetch('/api/checkout/'+id,{method:'POST'});location.reload();}"
@@ -885,7 +1042,7 @@ def admin():
             "await fetch('/api/beverage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({visitor_id:vid,visitor_name:vname,person_to_meet:person,drink:drink,quantity:qty,snacks:snacks})});"
             "showNB('&#10003; Order sent!',5000);}"
             "function parseIST(s){if(!s)return new Date();var p=s.split(' ');var dp=p[0].split('-');var tp=(p[1]||'0:0').split(':');return new Date(parseInt(dp[2]),parseInt(dp[1])-1,parseInt(dp[0]),parseInt(tp[0]),parseInt(tp[1]));}"
-            "function checkAVO(){var now=new Date();Object.keys(_vt).forEach(function(vid){var ot=parseIST(_vt[vid]);var diff=Math.floor((now-ot)/60000);var ao=document.getElementById('ao-'+vid);var at=document.getElementById('at-'+vid);if(ao){if(diff>=7){ao.style.display='block';if(at)at.textContent='';}else{ao.style.display='none';if(at)at.textContent='Order in '+(7-diff)+'m';}}});}"
+            "function checkAVO(){var now=new Date();Object.keys(_vt).forEach(function(vid){var ot=parseIST(_vt[vid]);var diff=Math.floor((now-ot)/60000);var ao=document.getElementById('ao-'+vid);var at=document.getElementById('at-'+vid);var isMgmt=_mgmtIds.indexOf(vid)>=0;if(ao){if(isMgmt||diff>=7){ao.style.display='block';if(at)at.textContent=isMgmt?'':'';}else{ao.style.display='none';if(at)at.textContent='Order in '+(7-diff)+'m';}}});}"
             "async function resetPwd(email,name){var np=prompt('New password for '+name+':');if(!np||np.length<4){alert('Min 4 chars!');return;}"
             "var r=await fetch('/api/admin-reset-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email,new_password:np})});"
             "var d=await r.json();if(d.success){var m=document.getElementById('rst-msg');m.textContent='&#10003; Password reset for '+name+'!';m.style.display='block';setTimeout(function(){m.style.display='none';},4000);}}"
@@ -949,6 +1106,174 @@ def admin_settings():
             "<label>New Password</label><input type='password' name='new_pass' placeholder='Min 4 chars' required>"
             "<button type='submit'>Update</button></form></div></div></body></html>")
 
+@app.route("/admin/gate-pass")
+def admin_gate_pass_page():
+    if not session.get("admin_ok"): return redirect("/admin")
+    staff_names = [s["name"] for s in get_all_staff()]
+    host_opts = "".join('<option value="'+n+'">'+n+'</option>' for n in staff_names)
+    hdr=make_header(LOGO_MAIN,'<a href="/admin">&#8592; Admin</a>')
+    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Create Gate Pass</title>"
+            "<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial;background:#f0f4f8}"+HEADER_CSS
+            +".container{max-width:560px;margin:20px auto;padding:0 15px}"
+            ".card{background:white;border-radius:9px;padding:22px;box-shadow:0 2px 8px rgba(0,0,0,0.07);margin-bottom:18px}"
+            ".card h3{color:#1565C0;margin-bottom:16px}label{display:block;font-size:13px;font-weight:600;color:#444;margin-bottom:5px;margin-top:12px}"
+            "input,select{width:100%;padding:10px;border:1.5px solid #ddd;border-radius:7px;font-size:14px}"
+            "button{padding:11px 22px;background:#1565C0;color:white;border:none;border-radius:7px;font-size:14px;font-weight:700;cursor:pointer;margin-top:16px;width:100%}"
+            "#result{display:none;margin-top:16px;padding:16px;border-radius:9px;background:#E8F5E9;color:#1b5e20;text-align:center}"
+            "#result b{font-size:26px;letter-spacing:3px;display:block;margin:6px 0}"
+            "</style></head><body>"+hdr+
+            "<div class='container'><div class='card'><h3>&#127915; Create Gate Pass (on behalf of any host)</h3>"
+            "<label>Visitor Name</label><input id='gp-name' placeholder='Visitor full name'>"
+            "<label>Visitor Phone</label><input id='gp-phone' placeholder='Mobile number'>"
+            "<label>Purpose</label><input id='gp-purpose' placeholder='Meeting purpose'>"
+            "<label>Host (who they're meeting)</label><select id='gp-host'><option value=''>-- Select host --</option>"+host_opts+"</select>"
+            "<label>Meeting Date</label><input type='date' id='gp-date'>"
+            "<label>Meeting Time</label><input type='time' id='gp-time'>"
+            "<button onclick='createGP()'>&#128203; Create Gate Pass</button>"
+            "<div id='result'></div>"
+            "</div></div>"
+            "<script>"
+            "async function createGP(){"
+            "var name=document.getElementById('gp-name').value.trim();var phone=document.getElementById('gp-phone').value.trim();"
+            "var purpose=document.getElementById('gp-purpose').value.trim();var host=document.getElementById('gp-host').value;"
+            "var d=document.getElementById('gp-date').value;var t=document.getElementById('gp-time').value;"
+            "if(!name||!phone||!host){alert('Visitor name, phone and host are required');return;}"
+            "var r=await fetch('/api/schedule-meeting',{method:'POST',headers:{'Content-Type':'application/json'},"
+            "body:JSON.stringify({visitor_name:name,visitor_phone:phone,purpose:purpose||'Meeting',host_name:host,meeting_date:d,meeting_time:t})});"
+            "var res=await r.json();"
+            "if(res.success){var el=document.getElementById('result');el.style.display='block';"
+            "el.innerHTML='&#9989; Gate pass created for <b>'+name+'</b> with host <b>'+host+'</b>.<br>Share this OTP with the visitor:<b>'+res.otp+'</b>The visitor gives this OTP to security at the gate; approval will then go to '+host+'.';"
+            "}else{alert('Failed to create gate pass');}}"
+            "</script></body></html>")
+
+@app.route("/admin/staff")
+def admin_staff_page():
+    if not session.get("admin_ok"): return redirect("/admin")
+    conn=get_db()
+    all_staff=[dict(r) for r in _fetchall(conn, "SELECT * FROM staff ORDER BY active DESC, department, name")]
+    conn.close()
+    rows=""
+    for s in all_staff:
+        badge = "<span class='badge approved'>Management</span>" if s["is_management"] else ""
+        status_badge = "<span class='badge approved'>Active</span>" if s["active"] else "<span class='badge rejected'>Removed</span>"
+        rows += ("<tr><td><b>"+s["name"]+"</b> "+badge+"</td><td>"+s["email"]+"</td><td>"+(s["department"] or "")+"</td>"
+                 "<td>"+status_badge+"</td>"
+                 "<td>"
+                 "<button class='btn ba' onclick=\"openEdit("+str(s["id"])+",'"+s["name"].replace("'","")+"','"+s["email"]+"','"+(s["department"] or "")+"',"+("1" if s["is_management"] else "0")+")\">&#9998; Edit</button> "
+                 "<button class='btn "+("br" if s["active"] else "bg")+"' onclick=\"toggleStaff("+str(s["id"])+")\">"+("&#10007; Remove" if s["active"] else "&#10003; Reactivate")+"</button>"
+                 "</td></tr>")
+    if not rows: rows='<tr><td colspan="5" style="text-align:center;padding:15px;color:#999">No staff yet</td></tr>'
+    dept_opts = "".join('<option value="'+d+'">'+d+'</option>' for d in list(get_staff_depts_map())+["Others"] if d)
+    hdr=make_header(LOGO_MAIN,'<a href="/admin">&#8592; Admin</a>')
+    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Manage Staff</title>"
+            "<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial;background:#f0f4f8}"+HEADER_CSS
+            +".container{max-width:1000px;margin:20px auto;padding:0 15px}"
+            ".card{background:white;border-radius:9px;padding:22px;box-shadow:0 2px 8px rgba(0,0,0,0.07);margin-bottom:18px}"
+            ".card h3{color:#1565C0;margin-bottom:16px}label{display:block;font-size:13px;font-weight:600;color:#444;margin-bottom:5px;margin-top:12px}"
+            "input,select{width:100%;padding:10px;border:1.5px solid #ddd;border-radius:7px;font-size:14px}"
+            "button.btn{padding:8px 14px;border:none;border-radius:7px;font-size:13px;font-weight:700;cursor:pointer;margin-top:8px}"
+            ".ba{background:#1565C0;color:white}.br{background:#C62828;color:white}.bg{background:#2E7D32;color:white}"
+            "table{width:100%;border-collapse:collapse;margin-top:10px}th{background:#1565C0;color:white;padding:9px;text-align:left;font-size:12px}"
+            "td{padding:9px;border-bottom:1px solid #eee;font-size:13px}"
+            ".badge{padding:3px 9px;border-radius:20px;font-size:11px;font-weight:700}.badge.approved{background:#E8F5E9;color:#2E7D32}.badge.rejected{background:#FFEBEE;color:#C62828}"
+            ".chk-row{display:flex;align-items:center;gap:8px;margin-top:14px}.chk-row input{width:auto}"
+            ".msg{background:#E8F5E9;color:#2E7D32;padding:10px;border-radius:7px;margin-bottom:15px;font-weight:600;display:none}"
+            "</style></head><body>"+hdr+
+            "<div class='container'>"
+            "<div id='msg' class='msg'></div>"
+            "<div class='card'><h3 id='form-title'>&#10133; Add New Staff</h3>"
+            "<input type='hidden' id='edit-id' value=''>"
+            "<label>Full Name</label><input id='f-name' placeholder='e.g. Ramesh Shah'>"
+            "<label>Official Email</label><input id='f-email' type='email' placeholder='name@maxwells.in'>"
+            "<label>Department</label><select id='f-dept'>"+dept_opts+"</select>"
+            "<div class='chk-row'><input type='checkbox' id='f-mgmt'><label style='margin:0'>Management (shows under \"Management\" category on visitor form)</label></div>"
+            "<button class='btn ba' style='margin-top:16px' onclick='saveStaff()'>&#128190; Save</button> "
+            "<button class='btn' style='background:#999;color:white;display:none' id='cancel-edit-btn' onclick='cancelEdit()'>Cancel</button>"
+            "</div>"
+            "<div class='card'><h3>&#128101; All Staff</h3>"
+            "<table><tr><th>Name</th><th>Email</th><th>Department</th><th>Status</th><th>Action</th></tr>"+rows+"</table></div>"
+            "</div>"
+            "<script>"
+            "function showMsg(t){var m=document.getElementById('msg');m.textContent=t;m.style.display='block';setTimeout(function(){m.style.display='none';},4000);}"
+            "function cancelEdit(){document.getElementById('edit-id').value='';document.getElementById('f-name').value='';document.getElementById('f-email').value='';"
+            "document.getElementById('f-dept').value='';document.getElementById('f-mgmt').checked=false;"
+            "document.getElementById('form-title').innerHTML='&#10133; Add New Staff';document.getElementById('cancel-edit-btn').style.display='none';}"
+            "function openEdit(id,name,email,dept,mgmt){document.getElementById('edit-id').value=id;document.getElementById('f-name').value=name;"
+            "document.getElementById('f-email').value=email;document.getElementById('f-dept').value=dept;document.getElementById('f-mgmt').checked=!!mgmt;"
+            "document.getElementById('form-title').innerHTML='&#9998; Edit Staff';document.getElementById('cancel-edit-btn').style.display='inline-block';window.scrollTo(0,0);}"
+            "async function saveStaff(){"
+            "var id=document.getElementById('edit-id').value;"
+            "var name=document.getElementById('f-name').value.trim();var email=document.getElementById('f-email').value.trim();"
+            "var dept=document.getElementById('f-dept').value;var mgmt=document.getElementById('f-mgmt').checked;"
+            "if(!name||!email){alert('Name and email required');return;}"
+            "var url=id?'/api/admin/staff/edit':'/api/admin/staff/add';"
+            "var body={name:name,email:email,department:dept,is_management:mgmt};if(id)body.id=id;"
+            "var r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});"
+            "var d=await r.json();if(d.success){location.reload();}else{alert(d.error||'Failed');}}"
+            "async function toggleStaff(id){if(!confirm('Change status for this staff member?'))return;"
+            "var r=await fetch('/api/admin/staff/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})});"
+            "var d=await r.json();if(d.success){location.reload();}else{alert(d.error||'Failed');}}"
+            "</script></body></html>")
+
+@app.route("/api/admin/staff/add", methods=["POST"])
+def admin_staff_add():
+    if not session.get("admin_ok"): return jsonify({"success":False,"error":"Not authorized"}),401
+    data=request.get_json() or {}
+    name=(data.get("name") or "").strip(); email=(data.get("email") or "").strip().lower()
+    dept=(data.get("department") or "Others").strip(); is_mgmt=1 if data.get("is_management") else 0
+    if not name or not email: return jsonify({"success":False,"error":"Name and email required"})
+    conn=get_db()
+    dup=_fetchone(conn, "SELECT id FROM staff WHERE email=?", (email,))
+    if dup:
+        conn.close(); return jsonify({"success":False,"error":"A staff member with this email already exists"})
+    try:
+        _exec(conn, "INSERT INTO staff (name,email,department,is_management,active,created_at) VALUES (?,?,?,?,1,?)",
+              (name,email,dept,is_mgmt,get_ist()))
+        conn.commit()
+    except Exception as e:
+        conn.close(); log.error("staff add failed: %s", e); return jsonify({"success":False,"error":"Could not add staff (name may already exist)"})
+    conn.close()
+    # No employee_passwords row is created here on purpose -- check_emp_password()
+    # already falls back to "password == name" with is_default=True for any
+    # email that has no password row yet, so the new staff member can log in
+    # immediately with their name as the password and will be forced to set a
+    # real one on first login.
+    return jsonify({"success":True})
+
+@app.route("/api/admin/staff/edit", methods=["POST"])
+def admin_staff_edit():
+    if not session.get("admin_ok"): return jsonify({"success":False,"error":"Not authorized"}),401
+    data=request.get_json() or {}
+    sid=data.get("id"); name=(data.get("name") or "").strip(); email=(data.get("email") or "").strip().lower()
+    dept=(data.get("department") or "Others").strip(); is_mgmt=1 if data.get("is_management") else 0
+    if not sid or not name or not email: return jsonify({"success":False,"error":"Missing fields"})
+    conn=get_db()
+    dup=_fetchone(conn, "SELECT id FROM staff WHERE email=? AND id!=?", (email,sid))
+    if dup:
+        conn.close(); return jsonify({"success":False,"error":"Another staff member already uses this email"})
+    try:
+        _exec(conn, "UPDATE staff SET name=?,email=?,department=?,is_management=? WHERE id=?", (name,email,dept,is_mgmt,sid))
+        conn.commit()
+    except Exception as e:
+        conn.close(); log.error("staff edit failed: %s", e); return jsonify({"success":False,"error":"Could not update staff"})
+    conn.close()
+    return jsonify({"success":True})
+
+@app.route("/api/admin/staff/toggle", methods=["POST"])
+def admin_staff_toggle():
+    if not session.get("admin_ok"): return jsonify({"success":False,"error":"Not authorized"}),401
+    data=request.get_json() or {}
+    sid=data.get("id")
+    if not sid: return jsonify({"success":False,"error":"Missing id"})
+    conn=get_db()
+    row=_fetchone(conn, "SELECT active FROM staff WHERE id=?", (sid,))
+    if not row:
+        conn.close(); return jsonify({"success":False,"error":"Not found"})
+    new_active = 0 if row["active"] else 1
+    _exec(conn, "UPDATE staff SET active=? WHERE id=?", (new_active,sid))
+    conn.commit(); conn.close()
+    return jsonify({"success":True,"active":new_active})
+
 @app.route("/admin/export")
 def export_excel():
     if not session.get("admin_ok"): return redirect("/admin")
@@ -956,12 +1281,29 @@ def export_excel():
     date_from=request.args.get("from",""); date_to=request.args.get("to","")
     dept=request.args.get("dept",""); status=request.args.get("status","")
     conn=get_db(); query="SELECT * FROM visitors WHERE 1=1"; params=[]
-    if date_from: query+=" AND created_at >= ?"; params.append(date_from)
-    if date_to: query+=" AND created_at <= ?"; params.append(date_to+" 23:59")
     if dept: query+=" AND department=?"; params.append(dept)
     if status: query+=" AND status=?"; params.append(status)
     query+=" ORDER BY id DESC"
     visitors=[dict(r) for r in _fetchall(conn, query,params)]
+
+    # created_at is stored as "DD-MM-YYYY HH:MM" text, so a SQL string comparison
+    # against the "YYYY-MM-DD" values from the date pickers gives wrong results
+    # (e.g. "13-07-2026" sorts before "2026-..." as plain text). Parse and filter
+    # by real datetimes instead.
+    if date_from or date_to:
+        try: from_dt = datetime.strptime(date_from, "%Y-%m-%d") if date_from else None
+        except ValueError: from_dt = None
+        try: to_dt = datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59) if date_to else None
+        except ValueError: to_dt = None
+        filtered = []
+        for v in visitors:
+            try: v_dt = datetime.strptime(v.get("created_at","") or "", "%d-%m-%Y %H:%M")
+            except ValueError: continue
+            if from_dt and v_dt < from_dt: continue
+            if to_dt and v_dt > to_dt: continue
+            filtered.append(v)
+        visitors = filtered
+
     gate_passes=[dict(r) for r in _fetchall(conn, "SELECT * FROM gate_passes ORDER BY id DESC")]
     conn.close()
     wb=openpyxl.Workbook()
@@ -1146,7 +1488,7 @@ def employee_login():
     err=""
     if request.method=="POST":
         email=request.form.get("email","").lower().strip(); password=request.form.get("password","").strip()
-        emp_map={v.lower():k for k,v in EMPLOYEE_EMAILS.items()}
+        emp_map={v.lower():k for k,v in get_staff_email_map().items()}
         if email in emp_map:
             emp_name=emp_map[email]; pw_ok,is_default=check_emp_password(email,password,emp_name)
             if pw_ok:
@@ -1189,8 +1531,7 @@ def employee_dashboard():
     emp_photo=profile.get("photo",DEFAULT_PHOTO) or DEFAULT_PHOTO
     emp_dept=profile.get("department",""); emp_desig=profile.get("designation","")
     if not emp_dept:
-        for d,members in DEPARTMENTS.items():
-            if name in members: emp_dept=d; break
+        emp_dept=get_staff_dept_for_name(name)
     conn=get_db()
     visitors=[dict(r) for r in _fetchall(conn, "SELECT * FROM visitors WHERE person_to_meet=? AND status='approved' AND checkout_at IS NULL ORDER BY id DESC",(name,))]
     all_visitors=[dict(r) for r in _fetchall(conn, "SELECT * FROM visitors WHERE person_to_meet=? ORDER BY id DESC LIMIT 10",(name,))]
@@ -1584,6 +1925,145 @@ def change_password():
 # ══════════════════════════════════════════════════
 # SECURITY (with Exit feature)
 # ══════════════════════════════════════════════════
+@app.route("/director-login", methods=["GET","POST"])
+def director_login():
+    err=""
+    if request.method=="POST":
+        pin=request.form.get("pin","").strip()
+        if pin==get_setting("director_pin","7788"):
+            session["director_ok"]=True; return redirect("/director-dashboard")
+        err="Wrong PIN!"
+    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Director Login</title>"
+            "<style>body{font-family:Arial;background:#f0f4f8}.box{max-width:400px;margin:80px auto;background:white;padding:38px;border-radius:13px;box-shadow:0 5px 18px rgba(0,0,0,0.1)}"
+            ".box h2{color:#1565C0;text-align:center;margin-bottom:22px}label{display:block;font-size:13px;font-weight:600;color:#444;margin-bottom:5px;margin-top:14px}"
+            "input{width:100%;padding:11px;border:2px solid #e0e0e0;border-radius:7px;font-size:14px}input:focus{outline:none;border-color:#1565C0}"
+            "button{width:100%;margin-top:18px;padding:12px;background:#1565C0;color:white;border:none;border-radius:7px;font-size:15px;font-weight:700;cursor:pointer}"
+            ".err{color:red;font-size:13px;margin-top:8px;text-align:center}"
+            "</style></head><body><div class='box'><h2>&#128202; Director Login</h2>"
+            "<form method='POST'><label>PIN</label><input type='password' name='pin' required autofocus>"
+            "<button type='submit'>LOGIN</button></form>"
+            +(("<p class='err'>"+err+"</p>") if err else "")
+            +"<p style='text-align:center;margin-top:12px'><a href='/' style='color:#1565C0'>Back to Form</a></p>"
+            "</div></body></html>")
+
+@app.route("/director-logout")
+def director_logout():
+    session.pop("director_ok",None); return redirect("/director-login")
+
+def _parse_ts(s):
+    if not s: return None
+    for fmt in ("%d-%m-%Y %H:%M","%d-%m-%Y %H:%M:%S","%Y-%m-%d %H:%M:%S","%Y-%m-%d %H:%M"):
+        try: return datetime.strptime(s, fmt)
+        except (ValueError, TypeError): continue
+    return None
+
+@app.route("/director-dashboard")
+def director_dashboard():
+    if not session.get("director_ok"): return redirect("/director-login")
+    conn=get_db()
+    visitors=[dict(r) for r in _fetchall(conn, "SELECT name,phone,department,person_to_meet,category,status,created_at,checkout_at FROM visitors ORDER BY id DESC")]
+    conn.close()
+
+    # Visitor duration buckets (created_at -> checkout_at, minutes)
+    dur_buckets = {"0-15 min":0, "15-30 min":0, "30-60 min":0, "1-2 hrs":0, "2+ hrs":0}
+    durations = []
+    for v in visitors:
+        a = _parse_ts(v.get("created_at")); b = _parse_ts(v.get("checkout_at"))
+        if a and b and b >= a:
+            mins = (b - a).total_seconds() / 60.0
+            durations.append(mins)
+            if mins <= 15: dur_buckets["0-15 min"] += 1
+            elif mins <= 30: dur_buckets["15-30 min"] += 1
+            elif mins <= 60: dur_buckets["30-60 min"] += 1
+            elif mins <= 120: dur_buckets["1-2 hrs"] += 1
+            else: dur_buckets["2+ hrs"] += 1
+    avg_duration = round(sum(durations)/len(durations), 1) if durations else 0
+
+    # Department-wise visit count
+    dept_counts = {}
+    for v in visitors:
+        d = v.get("department") or "Unspecified"
+        dept_counts[d] = dept_counts.get(d, 0) + 1
+
+    # Person-wise visit count (top 10)
+    person_counts = {}
+    for v in visitors:
+        p = v.get("person_to_meet") or "Unspecified"
+        person_counts[p] = person_counts.get(p, 0) + 1
+    top_persons = dict(sorted(person_counts.items(), key=lambda x: -x[1])[:10])
+
+    # Daily trend (last 30 days) and monthly trend (last 12 months)
+    daily_counts = {}
+    monthly_counts = {}
+    for v in visitors:
+        a = _parse_ts(v.get("created_at"))
+        if not a: continue
+        dkey = a.strftime("%d-%b")
+        mkey = a.strftime("%b-%Y")
+        daily_counts[dkey] = daily_counts.get(dkey, 0) + 1
+        monthly_counts[mkey] = monthly_counts.get(mkey, 0) + 1
+    # Keep chronological order by re-deriving sort keys
+    daily_sorted = sorted(daily_counts.items(), key=lambda x: datetime.strptime(x[0], "%d-%b"))[-30:]
+    def _mkey_sort(k):
+        try: return datetime.strptime(k, "%b-%Y")
+        except ValueError: return datetime.min
+    monthly_sorted = sorted(monthly_counts.items(), key=lambda x: _mkey_sort(x[0]))[-12:]
+
+    # Repeat visitors
+    phone_counts = {}
+    for v in visitors:
+        ph = v.get("phone")
+        if ph: phone_counts[ph] = phone_counts.get(ph, 0) + 1
+    total_unique = len(phone_counts)
+    repeat_visitors = sum(1 for c in phone_counts.values() if c > 1)
+    first_timers = total_unique - repeat_visitors
+
+    hdr=make_header(LOGO_MAIN,'<a href="/director-logout">Logout</a>')
+    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Director Dashboard</title>"
+            "<script src='https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js'></script>"
+            "<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial;background:#f0f4f8}"+HEADER_CSS
+            +".container{max-width:1200px;margin:20px auto;padding:0 15px}"
+            ".stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:20px}"
+            ".stat{background:white;border-radius:9px;padding:18px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,0.07)}"
+            ".stat .n{font-size:28px;font-weight:900;color:#1565C0}.stat .l{font-size:12px;color:#777;margin-top:4px}"
+            ".grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}"
+            "@media(max-width:800px){.grid2{grid-template-columns:1fr}}"
+            ".card{background:white;border-radius:9px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,0.07);margin-bottom:18px}"
+            ".card h3{color:#1565C0;margin-bottom:14px;font-size:15px}"
+            "</style></head><body>"+hdr+
+            "<div class='container'>"
+            "<div class='stats'>"
+            "<div class='stat'><div class='n'>"+str(len(visitors))+"</div><div class='l'>Total Visitors</div></div>"
+            "<div class='stat'><div class='n'>"+str(avg_duration)+"m</div><div class='l'>Avg. Time Spent</div></div>"
+            "<div class='stat'><div class='n'>"+str(total_unique)+"</div><div class='l'>Unique Visitors</div></div>"
+            "<div class='stat'><div class='n'>"+str(repeat_visitors)+"</div><div class='l'>Repeat Visitors</div></div>"
+            "<div class='stat'><div class='n'>"+str(first_timers)+"</div><div class='l'>First-time Visitors</div></div>"
+            "</div>"
+            "<div class='grid2'>"
+            "<div class='card'><h3>&#9202; Visitor Duration (Time Spent)</h3><canvas id='durChart' height='220'></canvas></div>"
+            "<div class='card'><h3>&#127970; Department-wise Visits</h3><canvas id='deptChart' height='220'></canvas></div>"
+            "<div class='card'><h3>&#128100; Top 10 Person-wise Visits</h3><canvas id='personChart' height='220'></canvas></div>"
+            "<div class='card'><h3>&#128197; Monthly Visitor Trend</h3><canvas id='monthChart' height='220'></canvas></div>"
+            "</div>"
+            "<div class='card'><h3>&#128200; Daily Visitor Trend (last 30 days)</h3><canvas id='dailyChart' height='90'></canvas></div>"
+            "<div class='card'><h3>&#128260; Repeat vs First-time Visitors</h3><canvas id='repeatChart' height='120'></canvas></div>"
+            "</div>"
+            "<script>"
+            "var durLabels="+json.dumps(list(dur_buckets.keys()))+",durData="+json.dumps(list(dur_buckets.values()))+";"
+            "var deptLabels="+json.dumps(list(dept_counts.keys()))+",deptData="+json.dumps(list(dept_counts.values()))+";"
+            "var personLabels="+json.dumps(list(top_persons.keys()))+",personData="+json.dumps(list(top_persons.values()))+";"
+            "var dailyLabels="+json.dumps([x[0] for x in daily_sorted])+",dailyData="+json.dumps([x[1] for x in daily_sorted])+";"
+            "var monthLabels="+json.dumps([x[0] for x in monthly_sorted])+",monthData="+json.dumps([x[1] for x in monthly_sorted])+";"
+            "var repeatLabels=['Repeat Visitors','First-time Visitors'],repeatData=["+str(repeat_visitors)+","+str(first_timers)+"];"
+            "var COLORS=['#1565C0','#2E7D32','#E65100','#6A1B9A','#C62828','#00838F','#9E9D24','#4527A0','#00695C','#AD1457'];"
+            "new Chart(document.getElementById('durChart'),{type:'doughnut',data:{labels:durLabels,datasets:[{data:durData,backgroundColor:COLORS}]},options:{plugins:{legend:{position:'bottom'}}}});"
+            "new Chart(document.getElementById('deptChart'),{type:'bar',data:{labels:deptLabels,datasets:[{label:'Visits',data:deptData,backgroundColor:'#1565C0'}]},options:{plugins:{legend:{display:false}}}});"
+            "new Chart(document.getElementById('personChart'),{type:'bar',data:{labels:personLabels,datasets:[{label:'Visits',data:personData,backgroundColor:'#2E7D32'}]},options:{indexAxis:'y',plugins:{legend:{display:false}}}});"
+            "new Chart(document.getElementById('monthChart'),{type:'bar',data:{labels:monthLabels,datasets:[{label:'Visitors',data:monthData,backgroundColor:'#E65100'}]},options:{plugins:{legend:{display:false}}}});"
+            "new Chart(document.getElementById('dailyChart'),{type:'line',data:{labels:dailyLabels,datasets:[{label:'Visitors',data:dailyData,borderColor:'#1565C0',backgroundColor:'rgba(21,101,192,0.1)',fill:true,tension:0.3}]},options:{plugins:{legend:{display:false}}}});"
+            "new Chart(document.getElementById('repeatChart'),{type:'bar',data:{labels:repeatLabels,datasets:[{data:repeatData,backgroundColor:['#6A1B9A','#00838F']}]},options:{indexAxis:'y',plugins:{legend:{display:false}}}});"
+            "</script></body></html>")
+
 @app.route("/security-login", methods=["GET","POST"])
 def security_login():
     err=""
@@ -1664,6 +2144,8 @@ def security_dashboard():
 "</div>"
 "<div id='otp-result' style='display:none;margin-top:12px;padding:14px;border-radius:10px;font-weight:600'></div>"
 "</div>"
+"<div class='card'><h3>&#128203; Gate Pass Entries</h3>"
+"<div id='gp-entries-list'><div style='text-align:center;color:#999;padding:20px'>Loading...</div></div></div>"
 "<div class='card'><h3>&#128100; Visitor Entries</h3>"
             "<div class='legend'>"
             "<div class='ld'><div class='ldot' style='background:#2E7D32'></div>Exit Time = Confirmed Exit</div>"
@@ -1704,7 +2186,7 @@ def security_dashboard():
 "res.innerHTML='&#10007; Invalid OTP! Please check and try again.';"
 "res.style.display='block';_beep(2);}});"
 "}"
-"var _lv="+str(latest_id)+",_lco="+str(lco_id)+",_currentGpId=0,_gpCaptures={};"\
+"var _lv="+str(latest_id)+",_lco="+str(lco_id)+",_lgp=0,_currentGpId=0,_gpCaptures={};"\
             "function showNB(msg,dur){var b=document.getElementById('nb');b.innerHTML=msg;b.style.display='block';setTimeout(function(){b.style.display='none';},dur||8000);}"\
             "var _gpCamStream=null;"\
             "async function startGpCam(side){"\
@@ -1763,10 +2245,14 @@ def security_dashboard():
             "try{var r=await fetch('/api/all-gate-pass-entries');var d=await r.json();"
             "var el=document.getElementById('gp-entries-list');if(!el)return;"
             "if(!d.entries||d.entries.length===0){el.innerHTML='<div style=\"text-align:center;color:#999;padding:20px\">No gate pass entries yet</div>';return;}"
+            "var topId=Math.max.apply(null,d.entries.map(function(e){return e.id;}));"
+            "if(_lgp&&topId>_lgp){var fresh=d.entries.find(function(e){return e.id===topId;});"
+            "_beep(3);showNB('&#128203; New gate pass created for <b>'+(fresh?fresh.visitor_name:'a visitor')+'</b> \\u2014 ask visitor for the OTP',10000);}"
+            "_lgp=topId;"
             "var html='<table class=\"st\"><tr><th>Visitor</th><th>Host</th><th>Purpose</th><th>OTP</th><th>Status</th><th>Time</th></tr>';"
             "d.entries.forEach(function(e){"
-            "var sc=e.status==='approved'?'color:#2E7D32;font-weight:700':e.status==='rejected'?'color:#C62828;font-weight:700':e.status==='gate_pending'?'color:#E65100;font-weight:700':'color:#555';"
-            "var sl=e.status==='approved'?'&#10003; Approved':e.status==='rejected'?'&#10007; Rejected':e.status==='gate_pending'?'&#9203; Pending Host':'Used';"
+            "var sc=e.status==='approved'?'color:#2E7D32;font-weight:700':e.status==='rejected'?'color:#C62828;font-weight:700':e.status==='gate_pending'?'color:#E65100;font-weight:700':e.status==='active'?'color:#1565C0;font-weight:700':'color:#555';"
+            "var sl=e.status==='approved'?'&#10003; Approved':e.status==='rejected'?'&#10007; Rejected':e.status==='gate_pending'?'&#9203; Pending Host':e.status==='active'?'&#128308; Awaiting Visitor':'Used';"
             "html+='<tr><td>'+e.visitor_name+'</td><td>'+e.host_name+'</td><td>'+e.purpose+'</td><td style=\"font-family:monospace;letter-spacing:2px;font-weight:700\">'+e.otp+'</td><td style=\"font-size:12px;'+sc+'\">'+sl+'</td><td style=\"font-size:11px;color:#999\">'+e.created_at+'</td></tr>';"
             "});"
             "el.innerHTML=html+'</table>';}catch(e){}}"
@@ -2008,7 +2494,7 @@ def host_pending_gate_passes():
 @app.route("/api/all-gate-pass-entries")
 def all_gate_pass_entries():
     conn=get_db()
-    rows=_fetchall(conn, "SELECT * FROM gate_passes WHERE status IN ('gate_pending','approved','rejected','used') ORDER BY id DESC LIMIT 50")
+    rows=_fetchall(conn, "SELECT * FROM gate_passes WHERE status IN ('active','gate_pending','approved','rejected','used') ORDER BY id DESC LIMIT 50")
     conn.close()
     return jsonify({"entries":[dict(r) for r in rows]})
 
@@ -2021,30 +2507,6 @@ def gate_pass_approval_status():
     return jsonify({"entry":dict(row) if row else None})
 
 
-
-@app.route("/api/debug-gate-passes")
-def debug_gate_passes():
-    conn=get_db()
-    rows=_fetchall(conn, "SELECT id,host_name,status,approved_at,created_at FROM gate_passes ORDER BY id DESC LIMIT 5")
-    conn.close()
-    from datetime import datetime as _dt,timezone as _tz,timedelta as _tda
-    ist_now=_dt.now(_tz(_tda(hours=5,minutes=30))).replace(tzinfo=None)
-    result=[]
-    for r in rows:
-        r=dict(r)
-        r["ist_now"]=str(ist_now)
-        if r["approved_at"]:
-            for fmt in ["%d-%m-%Y %H:%M","%d-%m-%Y %H:%M:%S","%Y-%m-%d %H:%M:%S","%Y-%m-%d %H:%M"]:
-                try:
-                    t=_dt.strptime(r["approved_at"],fmt)
-                    r["parsed_ok"]=fmt
-                    r["diff_seconds"]=(ist_now-t).total_seconds()
-                    break
-                except: continue
-            else:
-                r["parsed_ok"]="FAILED"
-        result.append(r)
-    return jsonify(result)
 
 @app.route("/sw.js")
 def service_worker():
@@ -2070,9 +2532,13 @@ if __name__ == "__main__":
     print("  Maxwell Visitor Management System v3.0")
     print("="*55)
     print("  App:      http://localhost:5000")
-    print("  Admin:    http://localhost:5000/admin  PIN: 1234")
+    print("  Admin:    http://localhost:5000/admin  PIN: "+get_setting("admin_pin","1234"))
     print("  Pantry:   http://localhost:5000/pantry")
-    print("  Security: http://localhost:5000/security-login")
+    print("  Security: http://localhost:5000/security-login  Pass: "+get_setting("security_pass","1234"))
     print("  Employee: http://localhost:5000/employee-login")
+    print("  Director: http://localhost:5000/director-login")
     print("="*55 + "\n")
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    debug_mode = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
+    if debug_mode:
+        log.warning("Running with debug=True -- never use this in production, it allows remote code execution.")
+    app.run(debug=debug_mode, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
