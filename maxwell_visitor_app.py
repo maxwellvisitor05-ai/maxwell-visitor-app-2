@@ -219,13 +219,16 @@ def init_db():
     extra_gp = ["purpose TEXT","otp TEXT","valid_from TEXT","valid_till TEXT","gp_photo TEXT","gp_id_front TEXT","gp_id_back TEXT"]
     for col in extra_visitors:
         try: _exec(conn, "ALTER TABLE visitors ADD COLUMN {}".format(col))
-        except: pass
+        except Exception:
+            if HAS_PG and DATABASE_URL: conn.rollback()
     for col in extra_orders:
         try: _exec(conn, "ALTER TABLE pantry_orders ADD COLUMN {}".format(col))
-        except: pass
+        except Exception:
+            if HAS_PG and DATABASE_URL: conn.rollback()
     for col in extra_gp:
         try: _exec(conn, "ALTER TABLE gate_passes ADD COLUMN {}".format(col))
-        except: pass
+        except Exception:
+            if HAS_PG and DATABASE_URL: conn.rollback()
     if HAS_PG and DATABASE_URL:
         _exec(conn, "INSERT INTO app_settings (key,value) VALUES (%s,%s) ON CONFLICT DO NOTHING", ('admin_pin','1234'))
         _exec(conn, "INSERT INTO app_settings (key,value) VALUES (%s,%s) ON CONFLICT DO NOTHING", ('security_pass','1234'))
@@ -252,6 +255,7 @@ def init_db():
                 _exec(conn, "INSERT INTO staff (name,email,department,is_management,active,created_at) VALUES (?,?,?,?,1,?)",
                       (name, email, dept, is_mgmt, now))
             except Exception as e:
+                if HAS_PG and DATABASE_URL: conn.rollback()
                 log.warning("Could not seed staff row for %s: %s", name, e)
         conn.commit()
     conn.close()
@@ -1278,6 +1282,14 @@ def admin_staff_toggle():
 def export_excel():
     if not session.get("admin_ok"): return redirect("/admin")
     if not HAS_EXCEL: return "openpyxl not installed",400
+    try:
+        return _export_excel_impl()
+    except Exception as e:
+        log.exception("Excel export failed")
+        return ("<h2>Export failed</h2><p>Something went wrong while building the Excel file: "
+                + str(e) + "</p><p>This has been logged on the server. Check server logs for the full traceback.</p>"), 500
+
+def _export_excel_impl():
     date_from=request.args.get("from",""); date_to=request.args.get("to","")
     dept=request.args.get("dept",""); status=request.args.get("status","")
     conn=get_db(); query="SELECT * FROM visitors WHERE 1=1"; params=[]
@@ -1324,28 +1336,30 @@ def export_excel():
         photo_data=v.get("photo","") or ""
         if photo_data and photo_data.startswith("data:image"):
             try:
-                import base64 as _b64
                 header,data=photo_data.split(",",1)
-                img_data=_b64.b64decode(data)
+                img_data=base64.b64decode(data)
                 img=openpyxl.drawing.image.Image(io.BytesIO(img_data))
                 img.width=50; img.height=50
                 img.anchor=f"B{row}"
                 ws.add_image(img)
-            except: ws.cell(row=row,column=2,value="Photo")
+            except Exception as e:
+                log.warning("export: could not embed visitor photo for row %s: %s", row, e)
+                ws.cell(row=row,column=2,value="Photo")
         # Data columns
         for ci,key in enumerate(["name","phone","person_to_meet","department","category","purpose","status","pass_number","created_at","checkout_at","exit_at","id_type","id_number"],3):
             ws.cell(row=row,column=ci,value=v.get(key,"") or "-")
-        # Legal doc image
-        doc_data=v.get("id_photo","") or v.get("document_photo","") or ""
+        # Legal doc image (front of ID card)
+        doc_data=v.get("id_front","") or ""
         if doc_data and doc_data.startswith("data:image"):
             try:
                 header,data=doc_data.split(",",1)
-                img_data=_b64.b64decode(data)
+                img_data=base64.b64decode(data)
                 img2=openpyxl.drawing.image.Image(io.BytesIO(img_data))
                 img2.width=80; img2.height=50
                 img2.anchor=f"N{row}"
                 ws.add_image(img2)
-            except: pass
+            except Exception as e:
+                log.warning("export: could not embed ID image for row %s: %s", row, e)
         fill=PatternFill("solid",fgColor="E8F5E9" if v.get("status")=="approved" else "FFEBEE" if v.get("status")=="rejected" else "FFF8E1")
         for ci in range(3,16): ws.cell(row=row,column=ci).fill=fill
 
