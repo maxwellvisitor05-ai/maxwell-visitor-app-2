@@ -82,6 +82,33 @@ def get_ist():
     ist = timezone(timedelta(hours=5, minutes=30))
     return datetime.now(ist).strftime("%d-%m-%Y %H:%M")
 
+def send_email(to_email, subject, html_body):
+    """Send an email via the configured SMTP relay. Returns True on success,
+    logs and returns False if SMTP isn't configured or sending fails (never
+    raises -- an email hiccup should never break the calling request)."""
+    smtp_host = os.environ.get("SMTP_HOST", "")
+    smtp_port = int(os.environ.get("SMTP_PORT", "587") or "587")
+    smtp_user = os.environ.get("SMTP_USER") or os.environ.get("SENDER_EMAIL", "")
+    smtp_pass = os.environ.get("SMTP_PASS") or os.environ.get("SENDER_PASSWORD", "")
+    if not (smtp_host and smtp_user and smtp_pass):
+        log.warning("Email not sent to %s (SMTP not configured): %s", to_email, subject)
+        return False
+    try:
+        import smtplib
+        from email.mime.text import MIMEText
+        msg = MIMEText(html_body, "html")
+        msg["Subject"] = subject
+        msg["From"] = smtp_user
+        msg["To"] = to_email
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            server.sendmail(smtp_user, [to_email], msg.as_string())
+        return True
+    except Exception as e:
+        log.error("Failed to send email to %s: %s", to_email, e)
+        return False
+
 def hash_pw(pw):
     return hashlib.sha256(pw.encode()).hexdigest()
 
@@ -213,6 +240,11 @@ def init_db():
         department TEXT, is_management INTEGER DEFAULT 0,
         active INTEGER DEFAULT 1, created_at TEXT
     )""")
+    _exec(conn, """CREATE TABLE IF NOT EXISTS staff_pending_actions (
+        id """+pk+""", action TEXT, staff_id INTEGER, payload TEXT,
+        token TEXT UNIQUE, status TEXT DEFAULT 'pending',
+        requested_by TEXT, created_at TEXT, decided_at TEXT
+    )""")
     # Add missing columns safely
     extra_visitors = ["id_front TEXT","id_back TEXT","exit_at TEXT","reschedule_date TEXT","reschedule_time TEXT","checkout_at TEXT","advance_token TEXT"]
     extra_orders = ["snacks TEXT","order_type TEXT DEFAULT 'drink'"]
@@ -308,6 +340,31 @@ def get_staff_dept_for_name(name):
     row = _fetchone(conn, "SELECT department FROM staff WHERE name=?", (name,))
     conn.close()
     return row["department"] if row else ""
+
+HR_APPROVER_EMAIL = os.environ.get("HR_APPROVER_EMAIL", "hr1@maxwells.in")
+
+def create_pending_staff_action(action, staff_id, payload_dict, requested_by=""):
+    conn = get_db()
+    token = secrets.token_urlsafe(24)
+    _exec(conn, "INSERT INTO staff_pending_actions (action,staff_id,payload,token,status,requested_by,created_at) VALUES (?,?,?,?,?,?,?)",
+          (action, staff_id, json.dumps(payload_dict), token, 'pending', requested_by, get_ist()))
+    conn.commit(); conn.close()
+    return token
+
+def send_hr_approval_email(description, token):
+    base = request.host_url.rstrip("/")
+    approve_url = base + "/hr-approve/" + token
+    reject_url = base + "/hr-reject/" + token
+    html = ("<div style='font-family:Arial;max-width:480px;margin:0 auto'>"
+            "<h2 style='color:#1565C0'>Staff Change Approval Needed</h2>"
+            "<p style='font-size:15px;color:#333'>"+description+"</p>"
+            "<div style='margin-top:20px'>"
+            "<a href='"+approve_url+"' style='background:#2E7D32;color:white;padding:11px 22px;border-radius:7px;text-decoration:none;font-weight:700;margin-right:10px'>&#10003; Approve</a>"
+            "<a href='"+reject_url+"' style='background:#C62828;color:white;padding:11px 22px;border-radius:7px;text-decoration:none;font-weight:700'>&#10007; Reject</a>"
+            "</div>"
+            "<p style='font-size:12px;color:#999;margin-top:20px'>Maxwell Visitor Management System</p>"
+            "</div>")
+    send_email(HR_APPROVER_EMAIL, "Staff Approval Needed - Maxwell Visitor System", html)
 
 def check_emp_password(email, password, emp_name):
     conn = get_db()
@@ -836,9 +893,17 @@ def show_pass(vid):
     v=dict(row)
     if v["status"]!="approved":
         return "<h2 style='text-align:center;margin-top:80px;font-family:Arial;color:#C62828'>Pass not available.</h2>"
-    bg,fg,label=PASS_COLORS.get(v["category"],("1565C0","FFFFFF","VISITOR"))
+    def s(key, default=""):
+        val = v.get(key)
+        return str(val) if val not in (None, "") else default
+    bg,fg,label=PASS_COLORS.get(v.get("category"),("1565C0","FFFFFF","VISITOR"))
     photo=v.get("photo") or DEFAULT_PHOTO
-    qr=make_qr("Maxwell\nName: "+v["name"]+"\nPass: "+v["pass_number"]+"\nTime: "+v["created_at"])
+    pass_number = s("pass_number", "N/A")
+    try:
+        qr=make_qr("Maxwell\nName: "+s("name")+"\nPass: "+pass_number+"\nTime: "+s("created_at"))
+    except Exception as e:
+        log.warning("show_pass: QR generation failed for visitor %s: %s", vid, e)
+        qr=""
     qr_img='<img src="data:image/png;base64,'+qr+'" width="90">' if qr else ""
     id_html=""
     if v.get("id_front"):
@@ -856,17 +921,17 @@ def show_pass(vid):
             "@media print{body{background:white;padding:0}.btns{display:none}}</style></head><body>"
             "<div class='pass'><div class='ph'><span style='font-size:18px;font-weight:900'>Maxwell</span>"
             "<div style='text-align:right'><div style='font-size:20px;font-weight:900'>"+label+"</div>"
-            "<div style='font-size:12px;opacity:0.8'>"+str(v["pass_number"])+"</div></div></div>"
+            "<div style='font-size:12px;opacity:0.8'>"+pass_number+"</div></div></div>"
             "<div class='pb'>"
             "<div style='display:flex;align-items:center;gap:14px;margin-bottom:18px'>"
             "<img src='"+photo+"' class='pp'>"
-            "<div><div style='font-size:19px;font-weight:900;color:#1565C0'>"+str(v["name"])+"</div>"
-            "<div style='font-size:12px;color:#666'>"+str(v["category"])+"</div></div></div>"
+            "<div><div style='font-size:19px;font-weight:900;color:#1565C0'>"+s("name")+"</div>"
+            "<div style='font-size:12px;color:#666'>"+s("category")+"</div></div></div>"
             "<hr style='border:none;border-top:1px solid #eee;margin-bottom:14px'>"
-            "<div class='il'>Department</div><div class='iv'>"+str(v["department"])+"</div>"
-            "<div class='il'>Person to Meet</div><div class='iv'>"+str(v["person_to_meet"])+"</div>"
-            "<div class='il'>Purpose</div><div class='iv'>"+str(v["purpose"])+"</div>"
-            "<div class='il'>Date & Time (IST)</div><div class='iv'>"+str(v["created_at"])+"</div>"
+            "<div class='il'>Department</div><div class='iv'>"+s("department")+"</div>"
+            "<div class='il'>Person to Meet</div><div class='iv'>"+s("person_to_meet")+"</div>"
+            "<div class='il'>Purpose</div><div class='iv'>"+s("purpose")+"</div>"
+            "<div class='il'>Date & Time (IST)</div><div class='iv'>"+s("created_at")+"</div>"
             +id_html+
             "<div style='text-align:center;margin-top:12px'>"+qr_img+"</div>"
             "<div class='appr'>&#10003; APPROVED</div></div>"
@@ -1155,6 +1220,7 @@ def admin_staff_page():
     if not session.get("admin_ok"): return redirect("/admin")
     conn=get_db()
     all_staff=[dict(r) for r in _fetchall(conn, "SELECT * FROM staff ORDER BY active DESC, department, name")]
+    pending_actions=[dict(r) for r in _fetchall(conn, "SELECT * FROM staff_pending_actions WHERE status='pending' ORDER BY id DESC")]
     conn.close()
     rows=""
     for s in all_staff:
@@ -1167,6 +1233,17 @@ def admin_staff_page():
                  "<button class='btn "+("br" if s["active"] else "bg")+"' onclick=\"toggleStaff("+str(s["id"])+")\">"+("&#10007; Remove" if s["active"] else "&#10003; Reactivate")+"</button>"
                  "</td></tr>")
     if not rows: rows='<tr><td colspan="5" style="text-align:center;padding:15px;color:#999">No staff yet</td></tr>'
+    pending_rows=""
+    action_labels={"add":"Add new staff","edit":"Edit staff","toggle":"Remove/Reactivate staff"}
+    for p in pending_actions:
+        payload=json.loads(p.get("payload") or "{}")
+        detail = payload.get("name","") or ("Staff #"+str(p.get("staff_id","")))
+        pending_rows += ("<tr><td>"+action_labels.get(p["action"],p["action"])+"</td><td>"+detail+"</td>"
+                          "<td style='color:#E65100;font-weight:700'>&#9203; Waiting on "+HR_APPROVER_EMAIL+"</td><td style='color:#999;font-size:12px'>"+p["created_at"]+"</td></tr>")
+    pending_section = ""
+    if pending_rows:
+        pending_section = ("<div class='card' style='border:1.5px solid #FFB74D;background:#FFF8E1'><h3 style='color:#E65100'>&#9203; Pending HR Approval ("+str(len(pending_actions))+")</h3>"
+                            "<table><tr><th>Action</th><th>Staff</th><th>Status</th><th>Requested</th></tr>"+pending_rows+"</table></div>")
     dept_opts = "".join('<option value="'+d+'">'+d+'</option>' for d in list(get_staff_depts_map())+["Others"] if d)
     hdr=make_header(LOGO_MAIN,'<a href="/admin">&#8592; Admin</a>')
     return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Manage Staff</title>"
@@ -1185,20 +1262,22 @@ def admin_staff_page():
             "</style></head><body>"+hdr+
             "<div class='container'>"
             "<div id='msg' class='msg'></div>"
+            +pending_section+
             "<div class='card'><h3 id='form-title'>&#10133; Add New Staff</h3>"
+            "<p style='font-size:12px;color:#888;margin-top:-8px;margin-bottom:6px'>Changes here are sent to "+HR_APPROVER_EMAIL+" for approval before they take effect.</p>"
             "<input type='hidden' id='edit-id' value=''>"
             "<label>Full Name</label><input id='f-name' placeholder='e.g. Ramesh Shah'>"
             "<label>Official Email</label><input id='f-email' type='email' placeholder='name@maxwells.in'>"
             "<label>Department</label><select id='f-dept'>"+dept_opts+"</select>"
             "<div class='chk-row'><input type='checkbox' id='f-mgmt'><label style='margin:0'>Management (shows under \"Management\" category on visitor form)</label></div>"
-            "<button class='btn ba' style='margin-top:16px' onclick='saveStaff()'>&#128190; Save</button> "
+            "<button class='btn ba' style='margin-top:16px' onclick='saveStaff()'>&#128190; Send for Approval</button> "
             "<button class='btn' style='background:#999;color:white;display:none' id='cancel-edit-btn' onclick='cancelEdit()'>Cancel</button>"
             "</div>"
             "<div class='card'><h3>&#128101; All Staff</h3>"
             "<table><tr><th>Name</th><th>Email</th><th>Department</th><th>Status</th><th>Action</th></tr>"+rows+"</table></div>"
             "</div>"
             "<script>"
-            "function showMsg(t){var m=document.getElementById('msg');m.textContent=t;m.style.display='block';setTimeout(function(){m.style.display='none';},4000);}"
+            "function showMsg(t){var m=document.getElementById('msg');m.textContent=t;m.style.display='block';setTimeout(function(){m.style.display='none';},6000);}"
             "function cancelEdit(){document.getElementById('edit-id').value='';document.getElementById('f-name').value='';document.getElementById('f-email').value='';"
             "document.getElementById('f-dept').value='';document.getElementById('f-mgmt').checked=false;"
             "document.getElementById('form-title').innerHTML='&#10133; Add New Staff';document.getElementById('cancel-edit-btn').style.display='none';}"
@@ -1213,10 +1292,10 @@ def admin_staff_page():
             "var url=id?'/api/admin/staff/edit':'/api/admin/staff/add';"
             "var body={name:name,email:email,department:dept,is_management:mgmt};if(id)body.id=id;"
             "var r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});"
-            "var d=await r.json();if(d.success){location.reload();}else{alert(d.error||'Failed');}}"
-            "async function toggleStaff(id){if(!confirm('Change status for this staff member?'))return;"
+            "var d=await r.json();if(d.success){showMsg(d.message||'Sent for approval');setTimeout(function(){location.reload();},1200);}else{alert(d.error||'Failed');}}"
+            "async function toggleStaff(id){if(!confirm('Send a request to HR for this change?'))return;"
             "var r=await fetch('/api/admin/staff/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})});"
-            "var d=await r.json();if(d.success){location.reload();}else{alert(d.error||'Failed');}}"
+            "var d=await r.json();if(d.success){showMsg(d.message||'Sent for approval');setTimeout(function(){location.reload();},1200);}else{alert(d.error||'Failed');}}"
             "</script></body></html>")
 
 @app.route("/api/admin/staff/add", methods=["POST"])
@@ -1228,21 +1307,12 @@ def admin_staff_add():
     if not name or not email: return jsonify({"success":False,"error":"Name and email required"})
     conn=get_db()
     dup=_fetchone(conn, "SELECT id FROM staff WHERE email=?", (email,))
-    if dup:
-        conn.close(); return jsonify({"success":False,"error":"A staff member with this email already exists"})
-    try:
-        _exec(conn, "INSERT INTO staff (name,email,department,is_management,active,created_at) VALUES (?,?,?,?,1,?)",
-              (name,email,dept,is_mgmt,get_ist()))
-        conn.commit()
-    except Exception as e:
-        conn.close(); log.error("staff add failed: %s", e); return jsonify({"success":False,"error":"Could not add staff (name may already exist)"})
     conn.close()
-    # No employee_passwords row is created here on purpose -- check_emp_password()
-    # already falls back to "password == name" with is_default=True for any
-    # email that has no password row yet, so the new staff member can log in
-    # immediately with their name as the password and will be forced to set a
-    # real one on first login.
-    return jsonify({"success":True})
+    if dup:
+        return jsonify({"success":False,"error":"A staff member with this email already exists"})
+    token = create_pending_staff_action("add", None, {"name":name,"email":email,"department":dept,"is_management":is_mgmt})
+    sent = send_hr_approval_email("Request to <b>add</b> a new staff member: <b>"+name+"</b> ("+email+"), Department: "+dept+(" - Management" if is_mgmt else ""), token)
+    return jsonify({"success":True,"pending":True,"email_sent":sent,"message":"Sent to HR ("+HR_APPROVER_EMAIL+") for approval"})
 
 @app.route("/api/admin/staff/edit", methods=["POST"])
 def admin_staff_edit():
@@ -1253,15 +1323,14 @@ def admin_staff_edit():
     if not sid or not name or not email: return jsonify({"success":False,"error":"Missing fields"})
     conn=get_db()
     dup=_fetchone(conn, "SELECT id FROM staff WHERE email=? AND id!=?", (email,sid))
-    if dup:
-        conn.close(); return jsonify({"success":False,"error":"Another staff member already uses this email"})
-    try:
-        _exec(conn, "UPDATE staff SET name=?,email=?,department=?,is_management=? WHERE id=?", (name,email,dept,is_mgmt,sid))
-        conn.commit()
-    except Exception as e:
-        conn.close(); log.error("staff edit failed: %s", e); return jsonify({"success":False,"error":"Could not update staff"})
+    old=_fetchone(conn, "SELECT name FROM staff WHERE id=?", (sid,))
     conn.close()
-    return jsonify({"success":True})
+    if dup:
+        return jsonify({"success":False,"error":"Another staff member already uses this email"})
+    old_name = old["name"] if old else "?"
+    token = create_pending_staff_action("edit", sid, {"name":name,"email":email,"department":dept,"is_management":is_mgmt})
+    sent = send_hr_approval_email("Request to <b>edit</b> staff member <b>"+old_name+"</b> &rarr; New name: "+name+", Email: "+email+", Department: "+dept+(" - Management" if is_mgmt else ""), token)
+    return jsonify({"success":True,"pending":True,"email_sent":sent,"message":"Sent to HR ("+HR_APPROVER_EMAIL+") for approval"})
 
 @app.route("/api/admin/staff/toggle", methods=["POST"])
 def admin_staff_toggle():
@@ -1270,13 +1339,70 @@ def admin_staff_toggle():
     sid=data.get("id")
     if not sid: return jsonify({"success":False,"error":"Missing id"})
     conn=get_db()
-    row=_fetchone(conn, "SELECT active FROM staff WHERE id=?", (sid,))
+    row=_fetchone(conn, "SELECT name,active FROM staff WHERE id=?", (sid,))
+    conn.close()
     if not row:
-        conn.close(); return jsonify({"success":False,"error":"Not found"})
-    new_active = 0 if row["active"] else 1
-    _exec(conn, "UPDATE staff SET active=? WHERE id=?", (new_active,sid))
+        return jsonify({"success":False,"error":"Not found"})
+    row=dict(row)
+    action_label = "reactivate" if not row["active"] else "remove"
+    token = create_pending_staff_action("toggle", sid, {})
+    sent = send_hr_approval_email("Request to <b>"+action_label+"</b> staff member: <b>"+row["name"]+"</b>", token)
+    return jsonify({"success":True,"pending":True,"email_sent":sent,"message":"Sent to HR ("+HR_APPROVER_EMAIL+") for approval"})
+
+@app.route("/hr-approve/<token>")
+def hr_approve_action(token):
+    conn=get_db()
+    row=_fetchone(conn, "SELECT * FROM staff_pending_actions WHERE token=?", (token,))
+    if not row:
+        conn.close(); return _hr_result_page("Invalid or expired link.", False)
+    row=dict(row)
+    if row["status"] != "pending":
+        conn.close(); return _hr_result_page("This request was already "+row["status"]+".", row["status"]=="approved")
+    payload = json.loads(row["payload"] or "{}")
+    action = row["action"]
+    try:
+        if action == "add":
+            _exec(conn, "INSERT INTO staff (name,email,department,is_management,active,created_at) VALUES (?,?,?,?,1,?)",
+                  (payload["name"], payload["email"], payload["department"], 1 if payload.get("is_management") else 0, get_ist()))
+        elif action == "edit":
+            _exec(conn, "UPDATE staff SET name=?,email=?,department=?,is_management=? WHERE id=?",
+                  (payload["name"], payload["email"], payload["department"], 1 if payload.get("is_management") else 0, row["staff_id"]))
+        elif action == "toggle":
+            srow = _fetchone(conn, "SELECT active FROM staff WHERE id=?", (row["staff_id"],))
+            new_active = 0 if (srow and srow["active"]) else 1
+            _exec(conn, "UPDATE staff SET active=? WHERE id=?", (new_active, row["staff_id"]))
+        _exec(conn, "UPDATE staff_pending_actions SET status='approved',decided_at=? WHERE id=?", (get_ist(), row["id"]))
+        conn.commit()
+    except Exception as e:
+        if HAS_PG and DATABASE_URL: conn.rollback()
+        conn.close()
+        log.exception("hr_approve_action failed")
+        return _hr_result_page("Something went wrong applying this change: "+str(e), False)
+    conn.close()
+    return _hr_result_page("Approved and applied successfully.", True)
+
+@app.route("/hr-reject/<token>")
+def hr_reject_action(token):
+    conn=get_db()
+    row=_fetchone(conn, "SELECT * FROM staff_pending_actions WHERE token=?", (token,))
+    if not row:
+        conn.close(); return _hr_result_page("Invalid or expired link.", False)
+    row=dict(row)
+    if row["status"] != "pending":
+        conn.close(); return _hr_result_page("This request was already "+row["status"]+".", row["status"]=="approved")
+    _exec(conn, "UPDATE staff_pending_actions SET status='rejected',decided_at=? WHERE id=?", (get_ist(), row["id"]))
     conn.commit(); conn.close()
-    return jsonify({"success":True,"active":new_active})
+    return _hr_result_page("Request rejected.", False)
+
+def _hr_result_page(message, ok):
+    color = "#2E7D32" if ok else "#C62828"
+    icon = "&#10003;" if ok else "&#10007;"
+    return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Maxwell HR Approval</title>"
+            "<style>body{font-family:Arial;background:#f0f4f8;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}"
+            ".box{background:white;padding:40px;border-radius:14px;box-shadow:0 5px 18px rgba(0,0,0,0.1);text-align:center;max-width:420px}"
+            ".ic{font-size:44px;color:"+color+"}</style></head><body><div class='box'>"
+            "<div class='ic'>"+icon+"</div><h2 style='color:"+color+";margin-top:10px'>"+message+"</h2>"
+            "</div></body></html>")
 
 @app.route("/admin/export")
 def export_excel():
@@ -2035,34 +2161,53 @@ def director_dashboard():
     hdr=make_header(LOGO_MAIN,'<a href="/director-logout">Logout</a>')
     return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Director Dashboard</title>"
             "<script src='https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js'></script>"
+            "<script src='https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-datalabels/2.2.0/chartjs-plugin-datalabels.min.js'></script>"
             "<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial;background:#f0f4f8}"+HEADER_CSS
             +".container{max-width:1200px;margin:20px auto;padding:0 15px}"
-            ".stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:20px}"
-            ".stat{background:white;border-radius:9px;padding:18px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,0.07)}"
-            ".stat .n{font-size:28px;font-weight:900;color:#1565C0}.stat .l{font-size:12px;color:#777;margin-top:4px}"
+            "h1.pg-title{color:#222;font-size:22px;margin-bottom:16px}"
+            ".stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin-bottom:20px}"
+            ".stat{background:white;border-radius:12px;overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,0.08)}"
+            ".stat .bar{height:5px}"
+            ".stat .body{padding:18px}"
+            ".stat .top-row{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px}"
+            ".stat .ic{width:42px;height:42px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px}"
+            ".stat .badge{font-size:10px;font-weight:800;letter-spacing:0.5px;padding:4px 10px;border-radius:20px;text-transform:uppercase}"
+            ".stat .lbl{font-size:11px;color:#888;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:4px}"
+            ".stat .n{font-size:30px;font-weight:900;color:#1a1a2e}"
+            ".stat .sub{font-size:12px;color:#999;margin-top:6px}"
             ".grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}"
-            "@media(max-width:800px){.grid2{grid-template-columns:1fr}}"
-            ".card{background:white;border-radius:9px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,0.07);margin-bottom:18px}"
-            ".card h3{color:#1565C0;margin-bottom:14px;font-size:15px}"
+            "@media(max-width:800px){.grid2{grid-template-columns:1fr}.stats{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}}"
+            ".card{background:white;border-radius:12px;padding:18px;box-shadow:0 2px 10px rgba(0,0,0,0.08);margin-bottom:16px}"
+            ".card h3{color:#333;margin-bottom:12px;font-size:14px;display:flex;align-items:center;gap:6px}"
             "</style></head><body>"+hdr+
             "<div class='container'>"
+            "<h1 class='pg-title'>&#128202; Director Dashboard</h1>"
             "<div class='stats'>"
-            "<div class='stat'><div class='n'>"+str(len(visitors))+"</div><div class='l'>Total Visitors</div></div>"
-            "<div class='stat'><div class='n'>"+str(avg_duration)+"m</div><div class='l'>Avg. Time Spent</div></div>"
-            "<div class='stat'><div class='n'>"+str(total_unique)+"</div><div class='l'>Unique Visitors</div></div>"
-            "<div class='stat'><div class='n'>"+str(repeat_visitors)+"</div><div class='l'>Repeat Visitors</div></div>"
-            "<div class='stat'><div class='n'>"+str(first_timers)+"</div><div class='l'>First-time Visitors</div></div>"
+            "<div class='stat'><div class='bar' style='background:#1565C0'></div><div class='body'>"
+            "<div class='top-row'><div class='ic' style='background:#E3F2FD'>&#128101;</div><div class='badge' style='background:#E3F2FD;color:#1565C0'>Total</div></div>"
+            "<div class='lbl'>Total Visitors</div><div class='n'>"+str(len(visitors))+"</div><div class='sub'>All-time visitor entries</div></div></div>"
+            "<div class='stat'><div class='bar' style='background:#2E7D32'></div><div class='body'>"
+            "<div class='top-row'><div class='ic' style='background:#E8F5E9'>&#9203;</div><div class='badge' style='background:#E8F5E9;color:#2E7D32'>Live</div></div>"
+            "<div class='lbl'>Avg. Time Spent</div><div class='n'>"+str(avg_duration)+"m</div><div class='sub'>Based on checked-out visits</div></div></div>"
+            "<div class='stat'><div class='bar' style='background:#E65100'></div><div class='body'>"
+            "<div class='top-row'><div class='ic' style='background:#FFF3E0'>&#128260;</div><div class='badge' style='background:#FFF3E0;color:#E65100'>Trend</div></div>"
+            "<div class='lbl'>Repeat Visitors</div><div class='n'>"+str(repeat_visitors)+"</div><div class='sub'>Out of "+str(total_unique)+" unique phone numbers</div></div></div>"
+            "<div class='stat'><div class='bar' style='background:#6A1B9A'></div><div class='body'>"
+            "<div class='top-row'><div class='ic' style='background:#F3E5F5'>&#127909;</div><div class='badge' style='background:#F3E5F5;color:#6A1B9A'>New</div></div>"
+            "<div class='lbl'>First-time Visitors</div><div class='n'>"+str(first_timers)+"</div><div class='sub'>Visited only once so far</div></div></div>"
             "</div>"
             "<div class='grid2'>"
-            "<div class='card'><h3>&#9202; Visitor Duration (Time Spent)</h3><canvas id='durChart' height='220'></canvas></div>"
-            "<div class='card'><h3>&#127970; Department-wise Visits</h3><canvas id='deptChart' height='220'></canvas></div>"
-            "<div class='card'><h3>&#128100; Top 10 Person-wise Visits</h3><canvas id='personChart' height='220'></canvas></div>"
-            "<div class='card'><h3>&#128197; Monthly Visitor Trend</h3><canvas id='monthChart' height='220'></canvas></div>"
+            "<div class='card'><h3>&#9202; Visitor Duration (Time Spent)</h3><canvas id='durChart' height='210'></canvas></div>"
+            "<div class='card'><h3>&#127970; Department-wise Visits</h3><canvas id='deptChart' height='210'></canvas></div>"
+            "<div class='card'><h3>&#128100; Top 10 Person-wise Visits</h3><canvas id='personChart' height='230'></canvas></div>"
+            "<div class='card'><h3>&#128197; Monthly Visitor Trend</h3><canvas id='monthChart' height='210'></canvas></div>"
             "</div>"
-            "<div class='card'><h3>&#128200; Daily Visitor Trend (last 30 days)</h3><canvas id='dailyChart' height='90'></canvas></div>"
-            "<div class='card'><h3>&#128260; Repeat vs First-time Visitors</h3><canvas id='repeatChart' height='120'></canvas></div>"
+            "<div class='card'><h3>&#128200; Daily Visitor Trend (last 30 days)</h3><canvas id='dailyChart' height='80'></canvas></div>"
+            "<div class='card'><h3>&#128260; Repeat vs First-time Visitors</h3><canvas id='repeatChart' height='90'></canvas></div>"
             "</div>"
             "<script>"
+            "Chart.register(ChartDataLabels);"
+            "Chart.defaults.set('plugins.datalabels',{color:'#333',font:{weight:'700',size:11}});"
             "var durLabels="+json.dumps(list(dur_buckets.keys()))+",durData="+json.dumps(list(dur_buckets.values()))+";"
             "var deptLabels="+json.dumps(list(dept_counts.keys()))+",deptData="+json.dumps(list(dept_counts.values()))+";"
             "var personLabels="+json.dumps(list(top_persons.keys()))+",personData="+json.dumps(list(top_persons.values()))+";"
@@ -2070,12 +2215,18 @@ def director_dashboard():
             "var monthLabels="+json.dumps([x[0] for x in monthly_sorted])+",monthData="+json.dumps([x[1] for x in monthly_sorted])+";"
             "var repeatLabels=['Repeat Visitors','First-time Visitors'],repeatData=["+str(repeat_visitors)+","+str(first_timers)+"];"
             "var COLORS=['#1565C0','#2E7D32','#E65100','#6A1B9A','#C62828','#00838F','#9E9D24','#4527A0','#00695C','#AD1457'];"
-            "new Chart(document.getElementById('durChart'),{type:'doughnut',data:{labels:durLabels,datasets:[{data:durData,backgroundColor:COLORS}]},options:{plugins:{legend:{position:'bottom'}}}});"
-            "new Chart(document.getElementById('deptChart'),{type:'bar',data:{labels:deptLabels,datasets:[{label:'Visits',data:deptData,backgroundColor:'#1565C0'}]},options:{plugins:{legend:{display:false}}}});"
-            "new Chart(document.getElementById('personChart'),{type:'bar',data:{labels:personLabels,datasets:[{label:'Visits',data:personData,backgroundColor:'#2E7D32'}]},options:{indexAxis:'y',plugins:{legend:{display:false}}}});"
-            "new Chart(document.getElementById('monthChart'),{type:'bar',data:{labels:monthLabels,datasets:[{label:'Visitors',data:monthData,backgroundColor:'#E65100'}]},options:{plugins:{legend:{display:false}}}});"
-            "new Chart(document.getElementById('dailyChart'),{type:'line',data:{labels:dailyLabels,datasets:[{label:'Visitors',data:dailyData,borderColor:'#1565C0',backgroundColor:'rgba(21,101,192,0.1)',fill:true,tension:0.3}]},options:{plugins:{legend:{display:false}}}});"
-            "new Chart(document.getElementById('repeatChart'),{type:'bar',data:{labels:repeatLabels,datasets:[{data:repeatData,backgroundColor:['#6A1B9A','#00838F']}]},options:{indexAxis:'y',plugins:{legend:{display:false}}}});"
+            "new Chart(document.getElementById('durChart'),{type:'doughnut',data:{labels:durLabels,datasets:[{data:durData,backgroundColor:COLORS}]},"
+            "options:{plugins:{legend:{position:'bottom',labels:{boxWidth:10,font:{size:10}}},datalabels:{color:'#fff',formatter:function(v){return v>0?v:'';}}}}});"
+            "new Chart(document.getElementById('deptChart'),{type:'bar',data:{labels:deptLabels,datasets:[{label:'Visits',data:deptData,backgroundColor:'#1565C0',borderRadius:4}]},"
+            "options:{plugins:{legend:{display:false},datalabels:{anchor:'end',align:'top',color:'#1565C0'}},scales:{y:{beginAtZero:true}}}});"
+            "new Chart(document.getElementById('personChart'),{type:'bar',data:{labels:personLabels,datasets:[{label:'Visits',data:personData,backgroundColor:'#2E7D32',borderRadius:4}]},"
+            "options:{indexAxis:'y',plugins:{legend:{display:false},datalabels:{anchor:'end',align:'right',color:'#2E7D32'}}}});"
+            "new Chart(document.getElementById('monthChart'),{type:'bar',data:{labels:monthLabels,datasets:[{label:'Visitors',data:monthData,backgroundColor:'#E65100',borderRadius:4}]},"
+            "options:{plugins:{legend:{display:false},datalabels:{anchor:'end',align:'top',color:'#E65100'}},scales:{y:{beginAtZero:true}}}});"
+            "new Chart(document.getElementById('dailyChart'),{type:'line',data:{labels:dailyLabels,datasets:[{label:'Visitors',data:dailyData,borderColor:'#1565C0',backgroundColor:'rgba(21,101,192,0.1)',fill:true,tension:0.3,pointRadius:3}]},"
+            "options:{plugins:{legend:{display:false},datalabels:{align:'top',color:'#1565C0',display:function(c){return c.dataIndex%3===0;}}}}});"
+            "new Chart(document.getElementById('repeatChart'),{type:'bar',data:{labels:repeatLabels,datasets:[{data:repeatData,backgroundColor:['#6A1B9A','#00838F'],borderRadius:4}]},"
+            "options:{indexAxis:'y',plugins:{legend:{display:false},datalabels:{anchor:'end',align:'right',color:'#333'}}}});"
             "</script></body></html>")
 
 @app.route("/security-login", methods=["GET","POST"])
@@ -2484,8 +2635,12 @@ def approve_gate_pass():
     _exec(conn, "INSERT INTO pantry_orders (visitor_name,person_to_meet,drink,quantity,note,created_at,order_type) VALUES (?,?,?,?,?,?,?)",
                  (gp["visitor_name"],gp["host_name"],"Water",1,"Guest arrived - Gate Pass",now,"gate_guest"))
     # Add to visitors table so normal flow works (order table, checkout etc)
-    _exec(conn, "INSERT INTO visitors (name,phone,person_to_meet,department,category,purpose,status,created_at) VALUES (?,?,?,?,?,?,?,?)",
-                 (gp["visitor_name"],gp.get("visitor_phone",""),gp["host_name"],"Gate Pass","Gate Pass Guest",gp["purpose"],"approved",now))
+    cur = _exec(conn, "SELECT COUNT(*) FROM visitors")
+    crow = cur.fetchone()
+    vcount = (crow[0] if not isinstance(crow, dict) else list(crow.values())[0]) + 1
+    gp_pass_num = "MW-GP-" + datetime.now().strftime("%Y%m%d") + "-" + str(vcount).zfill(4)
+    _exec(conn, "INSERT INTO visitors (name,phone,person_to_meet,department,category,purpose,status,created_at,pass_number) VALUES (?,?,?,?,?,?,?,?,?)",
+                 (gp["visitor_name"],gp.get("visitor_phone",""),gp["host_name"],"Gate Pass","Gate Pass Guest",gp["purpose"],"approved",now,gp_pass_num))
     vid=_fetchone(conn, "SELECT id FROM visitors ORDER BY id DESC LIMIT 1")["id"]
     conn.commit(); conn.close()
     return jsonify({"success":True,"visitor_name":gp["visitor_name"],"host_name":gp["host_name"],"gate_pass_id":gp_id,"visitor_id":vid})
