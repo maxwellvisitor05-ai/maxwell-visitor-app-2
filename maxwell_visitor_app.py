@@ -2,7 +2,7 @@
 """Maxwell Engineering Solutions - Visitor Management System v3.0"""
 
 from flask import Flask, request, jsonify, redirect, session, send_file
-import base64, io, os, hashlib, json, secrets, logging
+import base64, io, os, hashlib, json, secrets, logging, threading, uuid
 from datetime import datetime, timezone, timedelta
 try:
     import psycopg2, psycopg2.extras
@@ -47,6 +47,28 @@ DB = "maxwell_visitors.db"  # fallback for sqlite
 PANTRY_EMAIL = os.environ.get("PANTRY_EMAIL","maxwellvisitor05@gmail.com")
 PANTRY_PASSWORD = os.environ.get("PANTRY_PASSWORD","MaxwellPantry2024")
 SECURITY_MOBILE = "9023730509"
+
+# Director dashboard is shared by a small, known group (directors + CEO,
+# occasionally HR head / CFO) via one common PIN. Since anyone with the PIN
+# could otherwise open unlimited sessions, we cap concurrent logins here.
+DIRECTOR_MAX_SESSIONS = 5
+DIRECTOR_SESSION_TIMEOUT_MIN = 20  # inactive sessions auto-expire after this many minutes
+DIRECTOR_SESSIONS = {}  # sid -> last_active datetime
+_director_sessions_lock = threading.Lock()
+
+def _director_prune_sessions():
+    cutoff = datetime.now() - timedelta(minutes=DIRECTOR_SESSION_TIMEOUT_MIN)
+    with _director_sessions_lock:
+        for sid in [s for s, last in DIRECTOR_SESSIONS.items() if last < cutoff]:
+            DIRECTOR_SESSIONS.pop(sid, None)
+
+def _director_touch_session(sid):
+    with _director_sessions_lock:
+        DIRECTOR_SESSIONS[sid] = datetime.now()
+
+def _director_release_session(sid):
+    with _director_sessions_lock:
+        DIRECTOR_SESSIONS.pop(sid, None)
 
 EMPLOYEE_EMAILS = {
     "Nishit Patel":"production@maxwells.in","Vaibhav Desai":"qa@maxwells.in",
@@ -1462,7 +1484,8 @@ def _hr_result_page(message, ok):
 
 @app.route("/admin/export")
 def export_excel():
-    if not session.get("admin_ok"): return redirect("/admin")
+    if not (session.get("admin_ok") or session.get("director_ok")):
+        return redirect("/admin")
     if not HAS_EXCEL: return "openpyxl not installed",400
     try:
         return _export_excel_impl()
@@ -2136,8 +2159,18 @@ def director_login():
     if request.method=="POST":
         pin=request.form.get("pin","").strip()
         if pin==get_setting("director_pin","7788"):
-            session["director_ok"]=True; return redirect("/director-dashboard")
-        err="Wrong PIN!"
+            _director_prune_sessions()
+            existing_sid = session.get("director_sid")
+            with _director_sessions_lock:
+                active_count = len(DIRECTOR_SESSIONS)
+                already_counted = existing_sid in DIRECTOR_SESSIONS
+            if active_count >= DIRECTOR_MAX_SESSIONS and not already_counted:
+                err="Maximum "+str(DIRECTOR_MAX_SESSIONS)+" users are already logged in to the Director Dashboard. Please try again later."
+            else:
+                sid = existing_sid or uuid.uuid4().hex
+                session["director_sid"] = sid
+                _director_touch_session(sid)
+                session["director_ok"]=True; return redirect("/director-dashboard")
     return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Director Login</title>"
             "<style>body{font-family:Arial;background:#f0f4f8}.box{max-width:400px;margin:80px auto;background:white;padding:38px;border-radius:13px;box-shadow:0 5px 18px rgba(0,0,0,0.1)}"
             ".box h2{color:#1565C0;text-align:center;margin-bottom:22px}label{display:block;font-size:13px;font-weight:600;color:#444;margin-bottom:5px;margin-top:14px}"
@@ -2153,7 +2186,9 @@ def director_login():
 
 @app.route("/director-logout")
 def director_logout():
-    session.pop("director_ok",None); return redirect("/director-login")
+    _director_release_session(session.get("director_sid"))
+    session.pop("director_ok",None); session.pop("director_sid",None)
+    return redirect("/director-login")
 
 def _parse_ts(s):
     if not s: return None
@@ -2165,8 +2200,11 @@ def _parse_ts(s):
 @app.route("/director-dashboard")
 def director_dashboard():
     if not session.get("director_ok"): return redirect("/director-login")
+    sid = session.get("director_sid")
+    if sid: _director_touch_session(sid)
     conn=get_db()
-    visitors=[dict(r) for r in _fetchall(conn, "SELECT name,phone,department,person_to_meet,category,status,created_at,checkout_at FROM visitors ORDER BY id DESC")]
+    visitors=[dict(r) for r in _fetchall(conn, "SELECT name,phone,department,person_to_meet,category,status,purpose,created_at,checkout_at FROM visitors ORDER BY id DESC")]
+    scheduled_phones = set(r["visitor_phone"] for r in _fetchall(conn, "SELECT visitor_phone FROM scheduled_meetings") if r["visitor_phone"])
     conn.close()
 
     # Visitor duration buckets (created_at -> checkout_at, minutes)
@@ -2207,7 +2245,6 @@ def director_dashboard():
         mkey = a.strftime("%b-%Y")
         daily_counts[dkey] = daily_counts.get(dkey, 0) + 1
         monthly_counts[mkey] = monthly_counts.get(mkey, 0) + 1
-    # Keep chronological order by re-deriving sort keys
     daily_sorted = sorted(daily_counts.items(), key=lambda x: datetime.strptime(x[0], "%d-%b"))[-30:]
     def _mkey_sort(k):
         try: return datetime.strptime(k, "%b-%Y")
@@ -2222,6 +2259,52 @@ def director_dashboard():
     total_unique = len(phone_counts)
     repeat_visitors = sum(1 for c in phone_counts.values() if c > 1)
     first_timers = total_unique - repeat_visitors
+
+    # ── Peak hours heatmap: day-of-week (Mon..Sun) x hour-of-day count ──
+    peak_grid = [[0]*24 for _ in range(7)]
+    for v in visitors:
+        a = _parse_ts(v.get("created_at"))
+        if not a: continue
+        peak_grid[a.weekday()][a.hour] += 1
+    peak_max = max((max(row) for row in peak_grid), default=0) or 1
+
+    # ── Purpose of visit breakdown (top 4 + Other) ──
+    purpose_counts = {}
+    for v in visitors:
+        p = (v.get("purpose") or "").strip() or "Unspecified"
+        purpose_counts[p] = purpose_counts.get(p, 0) + 1
+    purpose_sorted = sorted(purpose_counts.items(), key=lambda x: -x[1])
+    top_purposes = purpose_sorted[:4]
+    other_sum = sum(c for _, c in purpose_sorted[4:])
+    if other_sum: top_purposes = top_purposes + [("Other", other_sum)]
+    purpose_total = sum(c for _, c in top_purposes) or 1
+
+    # ── Month-over-month comparison + sparkline ──
+    mom_current = monthly_sorted[-1][1] if monthly_sorted else 0
+    mom_prev = monthly_sorted[-2][1] if len(monthly_sorted) >= 2 else 0
+    mom_pct = round(((mom_current - mom_prev) / mom_prev) * 100, 1) if mom_prev else 0
+    sparkline_labels = [x[0] for x in monthly_sorted[-6:]]
+    sparkline_vals = [x[1] for x in monthly_sorted[-6:]]
+
+    # ── Pending checkouts (approved, not checked out yet) ──
+    now_dt = datetime.now()
+    pending_checkouts = []
+    for v in visitors:
+        if v.get("status") == "approved" and not v.get("checkout_at"):
+            a = _parse_ts(v.get("created_at"))
+            if a:
+                mins = int((now_dt - a).total_seconds() / 60)
+                pending_checkouts.append({"name": v.get("name") or "-", "sub": v.get("department") or v.get("person_to_meet") or "-", "mins": mins})
+    pending_checkouts.sort(key=lambda x: -x["mins"])
+    pending_checkouts_top = pending_checkouts[:5]
+
+    # ── Visitor source: pre-scheduled (matched against scheduled_meetings) vs walk-in ──
+    prescheduled_count = sum(1 for v in visitors if v.get("phone") and v.get("phone") in scheduled_phones)
+    total_for_src = len(visitors) or 1
+    prescheduled_pct = round(prescheduled_count / total_for_src * 100)
+    walkin_pct = 100 - prescheduled_pct
+
+    depts_for_filter = list(get_staff_depts_map().keys())
 
     hdr=make_header(LOGO_MAIN,'<a href="/director-logout">Logout</a>')
     return ("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Director Dashboard</title>"
@@ -2241,10 +2324,31 @@ def director_dashboard():
             ".stat .n{font-size:30px;font-weight:900;color:#1a1a2e}"
             ".stat .sub{font-size:12px;color:#999;margin-top:6px}"
             ".grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}"
-            "@media(max-width:800px){.grid2{grid-template-columns:1fr}.stats{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}}"
+            ".grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}"
+            "@media(max-width:800px){.grid2,.grid3{grid-template-columns:1fr}.stats{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}}"
             ".card{background:white;border-radius:12px;padding:18px;box-shadow:0 2px 10px rgba(0,0,0,0.08);margin-bottom:16px}"
             ".card h3{color:#333;margin-bottom:12px;font-size:14px;display:flex;align-items:center;gap:6px}"
-            "canvas{max-height:260px}"
+            "canvas{max-height:240px}"
+            ".heat-row{display:grid;grid-template-columns:34px repeat(24,1fr);gap:2px;align-items:center;margin-bottom:2px}"
+            ".heat-cell{height:14px;border-radius:2px}"
+            ".heat-lbl{font-size:10px;color:#888}"
+            ".waffle{display:grid;grid-template-columns:repeat(10,1fr);gap:2px;max-width:200px}"
+            ".waffle div{aspect-ratio:1;border-radius:2px}"
+            ".legend-row{display:flex;gap:14px;margin-top:10px;font-size:12px;color:#555;flex-wrap:wrap}"
+            ".legend-dot{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}"
+            ".gauge-wrap{position:relative;height:130px}"
+            ".gauge-num{text-align:center;font-size:22px;font-weight:900;color:#1a1a2e;margin-top:-58px}"
+            ".gauge-sub{text-align:center;font-size:11px;color:#999}"
+            ".hero{font-size:32px;font-weight:900;color:#1a1a2e}"
+            ".mom-up{color:#2E7D32;font-size:12px;font-weight:700}"
+            ".mom-down{color:#C62828;font-size:12px;font-weight:700}"
+            ".pending-row{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;background:#FFF8E1;border-radius:8px;margin-bottom:6px;font-size:12px}"
+            ".pending-row.old{background:#FFEBEE}"
+            ".filter-card{background:white;border-radius:12px;padding:16px 18px;box-shadow:0 2px 10px rgba(0,0,0,0.08);margin-bottom:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}"
+            ".filter-card .fld{display:flex;flex-direction:column;gap:4px}"
+            ".filter-card label{font-size:11px;color:#777;font-weight:700;text-transform:uppercase}"
+            ".filter-card input,.filter-card select{padding:8px 10px;border:1.5px solid #ddd;border-radius:7px;font-size:13px}"
+            ".filter-card button{padding:9px 18px;background:#2E7D32;color:white;border:none;border-radius:7px;font-weight:700;cursor:pointer;font-size:13px}"
             "</style></head><body>"+hdr+
             "<div class='container'>"
             "<h1 class='pg-title'>&#128202; Director Dashboard</h1>"
@@ -2262,38 +2366,104 @@ def director_dashboard():
             "<div class='top-row'><div class='ic' style='background:#F3E5F5'>&#127909;</div><div class='badge' style='background:#F3E5F5;color:#6A1B9A'>New</div></div>"
             "<div class='lbl'>First-time Visitors</div><div class='n'>"+str(first_timers)+"</div><div class='sub'>Visited only once so far</div></div></div>"
             "</div>"
+
+            "<div class='filter-card'>"
+            "<div class='fld'><label>From date</label><input type='date' id='exFrom'></div>"
+            "<div class='fld'><label>To date</label><input type='date' id='exTo'></div>"
+            "<div class='fld'><label>Department</label><select id='exDept'><option value=''>All departments</option>"
+            +"".join('<option value="'+d+'">'+d+'</option>' for d in depts_for_filter)+
+            "</select></div>"
+            "<button onclick=\"downloadExport()\">&#128196; Download Excel</button>"
+            "</div>"
+
             "<div class='grid2'>"
             "<div class='card'><h3>&#9202; Visitor Duration (Time Spent)</h3><canvas id='durChart' height='210'></canvas></div>"
             "<div class='card'><h3>&#127970; Department-wise Visits</h3><canvas id='deptChart' height='210'></canvas></div>"
             "<div class='card'><h3>&#128100; Top 10 Person-wise Visits</h3><canvas id='personChart' height='230'></canvas></div>"
             "<div class='card'><h3>&#128197; Monthly Visitor Trend</h3><canvas id='monthChart' height='210'></canvas></div>"
             "</div>"
-            "<div class='card'><h3>&#128200; Daily Visitor Trend (last 30 days)</h3><canvas id='dailyChart' height='80'></canvas></div>"
-            "<div class='card'><h3>&#128260; Repeat vs First-time Visitors</h3><canvas id='repeatChart' height='90'></canvas></div>"
+
+            "<div class='grid2'>"
+            "<div class='card'><h3>&#128336; Peak Hours (by day &amp; hour)</h3><div id='heatmap'></div>"
+            "<div class='legend-row'><span style='color:#999'>Lighter = fewer visitors, darker = more</span></div></div>"
+            "<div class='card'><h3>&#127919; Purpose of Visit</h3><canvas id='purposeChart' height='70'></canvas>"
+            "<div class='legend-row' id='purposeLegend'></div></div>"
+            "</div>"
+
+            "<div class='grid3'>"
+            "<div class='card'><h3>&#9203; Avg. Check-in to Check-out</h3><div class='gauge-wrap'><canvas id='slaGauge'></canvas></div>"
+            "<div class='gauge-num'>"+str(avg_duration)+"m</div><div class='gauge-sub'>target: 60m</div></div>"
+            "<div class='card'><h3>&#127970; Host-wise Visits</h3><canvas id='hostBubble' height='210'></canvas></div>"
+            "<div class='card'><h3>&#128200; Visitors this Month</h3><div class='hero'>"+str(mom_current)+"</div>"
+            "<div class='"+("mom-up" if mom_pct>=0 else "mom-down")+"'>"+("&#9650; " if mom_pct>=0 else "&#9660; ")+str(abs(mom_pct))+"% vs last month</div>"
+            "<canvas id='momSpark' height='60' style='margin-top:8px'></canvas></div>"
+            "</div>"
+
+            "<div class='grid2'>"
+            "<div class='card'><h3>&#9888; Pending Checkouts</h3><div id='pendingList'>"
+            +("".join("<div class='pending-row"+(" old" if p['mins']>=120 else "")+"'><span>"+p["name"]+" &bull; "+p["sub"]+"</span><span>"+str(p["mins"]//60)+"h "+str(p["mins"]%60)+"m</span></div>" for p in pending_checkouts_top) if pending_checkouts_top else "<div style='text-align:center;color:#999;padding:16px'>No pending checkouts</div>")
+            +"</div></div>"
+            "<div class='card'><h3>&#128667; Visitor Source</h3><div class='waffle' id='waffleGrid'></div>"
+            "<div class='legend-row'>"
+            "<span><span class='legend-dot' style='background:#1565C0'></span>Pre-scheduled "+str(prescheduled_pct)+"%</span>"
+            "<span><span class='legend-dot' style='background:#e0e0e0'></span>Walk-in "+str(walkin_pct)+"%</span>"
+            "</div></div>"
+            "</div>"
+
             "</div>"
             "<script>"
             "Chart.register(ChartDataLabels);"
             "Chart.defaults.maintainAspectRatio=false;"
             "Chart.defaults.set('plugins.datalabels',{color:'#333',font:{weight:'700',size:11}});"
+            "function downloadExport(){var f=document.getElementById('exFrom').value,t=document.getElementById('exTo').value,d=document.getElementById('exDept').value;"
+            "var u='/admin/export?';if(f)u+='from='+f+'&';if(t)u+='to='+t+'&';if(d)u+='dept='+encodeURIComponent(d)+'&';window.location.href=u;}"
             "var durLabels="+json.dumps(list(dur_buckets.keys()))+",durData="+json.dumps(list(dur_buckets.values()))+";"
             "var deptLabels="+json.dumps(list(dept_counts.keys()))+",deptData="+json.dumps(list(dept_counts.values()))+";"
             "var personLabels="+json.dumps(list(top_persons.keys()))+",personData="+json.dumps(list(top_persons.values()))+";"
-            "var dailyLabels="+json.dumps([x[0] for x in daily_sorted])+",dailyData="+json.dumps([x[1] for x in daily_sorted])+";"
             "var monthLabels="+json.dumps([x[0] for x in monthly_sorted])+",monthData="+json.dumps([x[1] for x in monthly_sorted])+";"
-            "var repeatLabels=['Repeat Visitors','First-time Visitors'],repeatData=["+str(repeat_visitors)+","+str(first_timers)+"];"
-            "var COLORS=['#1565C0','#2E7D32','#E65100','#6A1B9A','#C62828','#00838F','#9E9D24','#4527A0','#00695C','#AD1457'];"
-            "new Chart(document.getElementById('durChart'),{type:'doughnut',data:{labels:durLabels,datasets:[{data:durData,backgroundColor:COLORS}]},"
-            "options:{plugins:{legend:{position:'bottom',labels:{boxWidth:10,font:{size:10}}},datalabels:{color:'#fff',formatter:function(v){return v>0?v:'';}}}}});"
-            "new Chart(document.getElementById('deptChart'),{type:'bar',data:{labels:deptLabels,datasets:[{label:'Visits',data:deptData,backgroundColor:'#1565C0',borderRadius:4}]},"
-            "options:{plugins:{legend:{display:false},datalabels:{anchor:'end',align:'top',color:'#1565C0'}},scales:{y:{beginAtZero:true}}}});"
-            "new Chart(document.getElementById('personChart'),{type:'bar',data:{labels:personLabels,datasets:[{label:'Visits',data:personData,backgroundColor:'#2E7D32',borderRadius:4}]},"
-            "options:{indexAxis:'y',plugins:{legend:{display:false},datalabels:{anchor:'end',align:'right',color:'#2E7D32'}}}});"
-            "new Chart(document.getElementById('monthChart'),{type:'bar',data:{labels:monthLabels,datasets:[{label:'Visitors',data:monthData,backgroundColor:'#E65100',borderRadius:4}]},"
-            "options:{plugins:{legend:{display:false},datalabels:{anchor:'end',align:'top',color:'#E65100'}},scales:{y:{beginAtZero:true}}}});"
-            "new Chart(document.getElementById('dailyChart'),{type:'line',data:{labels:dailyLabels,datasets:[{label:'Visitors',data:dailyData,borderColor:'#1565C0',backgroundColor:'rgba(21,101,192,0.1)',fill:true,tension:0.3,pointRadius:3}]},"
-            "options:{plugins:{legend:{display:false},datalabels:{align:'top',color:'#1565C0',display:function(c){return c.dataIndex%3===0;}}}}});"
-            "new Chart(document.getElementById('repeatChart'),{type:'bar',data:{labels:repeatLabels,datasets:[{data:repeatData,backgroundColor:['#6A1B9A','#00838F'],borderRadius:4}]},"
+            "var purposeLabels="+json.dumps([x[0] for x in top_purposes])+",purposeData="+json.dumps([x[1] for x in top_purposes])+";"
+            "var sparkLabels="+json.dumps(sparkline_labels)+",sparkData="+json.dumps(sparkline_vals)+";"
+            "var peakGrid="+json.dumps(peak_grid)+",peakMax="+json.dumps(peak_max)+";"
+            "var avgDuration="+json.dumps(avg_duration)+";"
+            "var deptBubbleLabels="+json.dumps(list(dept_counts.keys())[:6])+",deptBubbleData="+json.dumps(list(dept_counts.values())[:6])+";"
+            "var prescheduledPct="+json.dumps(prescheduled_pct)+";"
+
+            "var DONUT_COLORS=['#7F77DD','#1D9E75','#EF9F27','#D4537E','#D85A30'];"
+            "new Chart(document.getElementById('durChart'),{type:'doughnut',data:{labels:durLabels,datasets:[{data:durData,backgroundColor:DONUT_COLORS,borderColor:'#fff',borderWidth:2}]},"
+            "options:{cutout:'62%',plugins:{legend:{position:'bottom',labels:{boxWidth:10,font:{size:10}}},datalabels:{color:'#fff',formatter:function(v){return v>0?v:'';}}}}});"
+
+            "new Chart(document.getElementById('deptChart'),{type:'bar',data:{labels:deptLabels,datasets:[{label:'Visits',data:deptData,backgroundColor:'#378ADD',borderRadius:6}]},"
+            "options:{plugins:{legend:{display:false},datalabels:{anchor:'end',align:'top',color:'#378ADD'}},scales:{y:{beginAtZero:true}}}});"
+
+            "var _personColors=personData.map(function(v,i){return i<3?'#D4537E':'#F0997B';});"
+            "new Chart(document.getElementById('personChart'),{type:'bar',data:{labels:personLabels,datasets:[{label:'Visits',data:personData,backgroundColor:_personColors,borderRadius:6}]},"
             "options:{indexAxis:'y',plugins:{legend:{display:false},datalabels:{anchor:'end',align:'right',color:'#333'}}}});"
+
+            "new Chart(document.getElementById('monthChart'),{type:'line',data:{labels:monthLabels,datasets:[{label:'Visitors',data:monthData,borderColor:'#639922',backgroundColor:'rgba(99,153,34,0.12)',fill:true,tension:0.35,pointRadius:3,pointBackgroundColor:'#639922',borderWidth:2}]},"
+            "options:{plugins:{legend:{display:false},datalabels:{align:'top',color:'#639922',display:function(c){return c.dataIndex%2===0;}}}}});"
+
+            "new Chart(document.getElementById('purposeChart'),{type:'bar',data:{labels:['Purpose'],datasets:purposeLabels.map(function(lbl,i){return {label:lbl,data:[purposeData[i]],backgroundColor:DONUT_COLORS[i%DONUT_COLORS.length]};})},"
+            "options:{indexAxis:'y',plugins:{legend:{display:false}},scales:{x:{stacked:true,display:false},y:{stacked:true,display:false}}}});"
+            "document.getElementById('purposeLegend').innerHTML=purposeLabels.map(function(l,i){return \"<span><span class='legend-dot' style='background:\"+DONUT_COLORS[i%DONUT_COLORS.length]+\"'></span>\"+l+\"</span>\";}).join('');"
+
+            "new Chart(document.getElementById('slaGauge'),{type:'doughnut',data:{datasets:[{data:[Math.min(avgDuration,60),Math.max(60-avgDuration,0)],backgroundColor:['#639922','#e1e0d9'],borderWidth:0}]},"
+            "options:{circumference:180,rotation:270,cutout:'75%',plugins:{legend:{display:false},tooltip:{enabled:false},datalabels:{display:false}}}});"
+
+            "new Chart(document.getElementById('hostBubble'),{type:'bubble',data:{datasets:[{data:deptBubbleLabels.map(function(l,i){var r=6+Math.sqrt(deptBubbleData[i]||0)*3;return {x:(i%3)+1,y:Math.floor(i/3)+1,r:r,label:l,v:deptBubbleData[i]};}),backgroundColor:['#7F77DD','#1D9E75','#EF9F27','#D4537E','#D85A30','#378ADD']}]},"
+            "options:{plugins:{legend:{display:false},datalabels:{display:false},tooltip:{callbacks:{label:function(c){return c.raw.label+': '+c.raw.v;}}}},scales:{x:{display:false,min:0,max:4},y:{display:false,min:0,max:3}}}});"
+
+            "new Chart(document.getElementById('momSpark'),{type:'line',data:{labels:sparkLabels,datasets:[{data:sparkData,borderColor:'#1D9E75',backgroundColor:'rgba(29,158,117,0.1)',fill:true,tension:0.35,pointRadius:0,borderWidth:2}]},"
+            "options:{plugins:{legend:{display:false},datalabels:{display:false}},scales:{x:{display:false},y:{display:false}}}});"
+
+            "var hm=document.getElementById('heatmap');var days=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];"
+            "for(var d=0;d<7;d++){var row=document.createElement('div');row.className='heat-row';"
+            "var lbl=document.createElement('div');lbl.className='heat-lbl';lbl.textContent=days[d];row.appendChild(lbl);"
+            "for(var h=0;h<24;h++){var c=document.createElement('div');c.className='heat-cell';var val=peakGrid[d][h];var op=peakMax?val/peakMax:0;"
+            "c.style.background='rgba(21,101,192,'+(0.08+op*0.85)+')';c.title=days[d]+' '+h+':00 - '+val+' visitors';row.appendChild(c);}"
+            "hm.appendChild(row);}"
+
+            "var wf=document.getElementById('waffleGrid');var filled=Math.round(prescheduledPct);"
+            "for(var i=0;i<100;i+=1){var cell=document.createElement('div');cell.style.background=(i<filled)?'#1565C0':'#e0e0e0';wf.appendChild(cell);}"
             "</script></body></html>")
 
 @app.route("/security-login", methods=["GET","POST"])
